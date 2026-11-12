@@ -43,6 +43,10 @@ async def fake_ha(monkeypatch, go2rtc_status=200):
         return web.Response()
 
     async def automation(request):
+        if request.method == "GET":  # a1 is new, user1 the user's own
+            if request.match_info["id"] != "user1":
+                return web.json_response({"message": "Resource not found"}, status=404)
+            return web.json_response(USER_AUTOMATION)
         posted.append((request.path, await request.read()))
         return web.json_response({"result": "ok"})
 
@@ -50,7 +54,7 @@ async def fake_ha(monkeypatch, go2rtc_status=200):
     app.router.add_get("/addons/{slug}/info", addon_info)
     app.router.add_route("*", "/api/hassio_ingress/tokNR/flows", nodered)
     app.router.add_route("*", "/api/hassio_ingress/tokG/api/config", go2rtc)
-    app.router.add_post("/api/config/automation/config/{id}", automation)
+    app.router.add_route("*", "/api/config/automation/config/{id}", automation)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "127.0.0.1", 0)
@@ -145,5 +149,19 @@ def test_automation_config(monkeypatch):
             message = await refused(proxy, post(path + "?x=1", bad))
             assert message.startswith(f"{path}: action: shell_command.x")
             assert len(posted) == 1
+            # the user's own automation, renamed entity: its hassio action was there
+            user = "/api/config/automation/config/user1"
+            renamed = json.dumps({**USER_AUTOMATION, "triggers": [{"entity_id": "b.new"}]})
+            assert (await proxy.handle(post(user, renamed.encode())))["status"] == 200
+            more = {**USER_AUTOMATION, "actions": [*USER_AUTOMATION["actions"], *bad_actions]}
+            await refused(proxy, post(user, json.dumps(more).encode()))
+            assert len(posted) == 2
 
     asyncio.run(scenario())
+
+
+USER_AUTOMATION = {
+    "triggers": [{"entity_id": "b.old"}],
+    "actions": [{"action": "hassio.addon_restart", "data": {"addon": "x"}}],
+}
+bad_actions = [{"action": "shell_command.x"}]

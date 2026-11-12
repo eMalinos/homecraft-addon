@@ -6,6 +6,7 @@ options. Pure functions, no I/O; each check returns the refused item or None."""
 
 import json
 import re
+from collections import Counter
 
 import yaml
 
@@ -24,17 +25,43 @@ FORBIDDEN_KEYS = frozenset(
         "panel_custom",
         "panel_iframe",
         "http",
+        "frontend",  # extra_module_url: JS into every browser
+        "lovelace",  # resources: the same
+        "ffmpeg",  # its binary
+        "logger",
     }
 )
+# Not forbidden, the library needs them: `recorder` (observability's
+# purge_keep_days) and `influxdb`, but that only as a filter (INFLUXDB_KEYS):
+# where the data goes comes from the integration's config flow.
+INFLUXDB_KEYS = frozenset({"include", "exclude", "ignore_attributes"})
 # homeassistant: customize stays; these widen what HA loads or lets in.
 HOMEASSISTANT_KEYS = frozenset(
-    {"auth_providers", "packages", "allowlist_external_dirs", "allowlist_external_urls"}
+    {
+        "auth_providers",
+        "packages",
+        "allowlist_external_dirs",
+        "allowlist_external_urls",
+        "media_dirs",
+        "customize_glob",
+    }
 )
 FORBIDDEN_PLATFORMS = frozenset({"command_line", "shell_command", "rest", "scrape"})
 # Every service of these domains; `hassio` as a whole: add-on stdin/start/stop,
 # host reboot/shutdown, backups (the library calls none of it).
 FORBIDDEN_DOMAINS = frozenset(
-    {"shell_command", "rest_command", "python_script", "pyscript", "hassio"}
+    {"shell_command", "rest_command", "python_script", "pyscript", "hassio", "downloader", "backup"}
+)
+# Single services (`*`: a prefix). The library calls homeassistant.update_entity
+# and recorder.get_statistics, so those domains stay; `notify` too (mobile_app).
+FORBIDDEN_SERVICES = frozenset(
+    {
+        "update.install",
+        "homeassistant.stop",
+        "homeassistant.restart",
+        "recorder.disable",
+        "recorder.purge*",
+    }
 )
 SERVICE_KEYS = ("action", "service", "service_template", "perform_action")
 
@@ -91,47 +118,73 @@ def _load(text: str) -> tuple[object, str | None]:
 
 
 def service_refused(name: object) -> bool:
-    """A service name in a forbidden domain, or one whose domain is a template
-    (could be any). `script.hfb_notify_{{ channel }}` keeps its domain."""
+    """A forbidden service, or one a template could make forbidden: a templated
+    domain, or a template after a domain with forbidden services.
+    `script.hfb_notify_{{ channel }}` keeps its domain and passes."""
     if not isinstance(name, str):
         return False
-    fixed = re.split(r"\{[{%#]", name.strip().lower(), maxsplit=1)[0]
+    lowered = name.strip().lower()
+    fixed = re.split(r"\{[{%#]", lowered, maxsplit=1)[0]
+    templated = fixed != lowered
     if "." not in fixed:
-        return fixed != name.strip().lower()  # a template before the dot
-    return fixed.split(".", 1)[0] in FORBIDDEN_DOMAINS
+        return templated  # a template before the dot
+    domain = fixed.split(".", 1)[0]
+    if domain in FORBIDDEN_DOMAINS:
+        return True
+    for s in FORBIDDEN_SERVICES:
+        if templated and s.startswith(domain + "."):
+            return True
+        if fixed == s or (s.endswith("*") and fixed.startswith(s[:-1])):
+            return True
+    return False
 
 
-def _walk(node: object, seen: set[int], config: bool = True) -> str | None:
-    """The first forbidden service anywhere in the tree, and with `config`
-    (HA configuration, not a dashboard) the first forbidden key or platform."""
+def _findings(node: object, config: bool, seen: set[int], out: list[str]) -> list[str]:
+    """Every forbidden service in the tree, and with `config` (HA
+    configuration, not a dashboard) every forbidden key or platform. A key
+    counts by its domain: `shell_command 2:` is `shell_command`."""
     if isinstance(node, dict | list):
         if id(node) in seen:  # YAML aliases: each shared node once (no alias bomb)
-            return None
+            return out
         seen.add(id(node))
     if isinstance(node, list):
         for item in node:
-            if found := _walk(item, seen, config):
-                return found
+            _findings(item, config, seen, out)
     elif isinstance(node, dict):
         for key, value in node.items():
-            if config and key in FORBIDDEN_KEYS:
-                return str(key)
-            if config and key == "homeassistant" and isinstance(value, dict):
-                if bad := HOMEASSISTANT_KEYS & value.keys():
-                    return f"homeassistant: {sorted(bad)[0]}"
-            if config and key == "platform" and value in FORBIDDEN_PLATFORMS:
-                return f"platform: {value}"
-            if key in SERVICE_KEYS and service_refused(value):
-                return f"{key}: {value}"
-            if found := _walk(value, seen, config):
-                return found
+            name = str(key).split(" ", 1)[0].lower()
+            if config and name in FORBIDDEN_KEYS:
+                out.append(name)
+            if config and name == "homeassistant" and isinstance(value, dict):
+                bad = HOMEASSISTANT_KEYS & {str(k).lower() for k in value}
+                out += [f"homeassistant: {k}" for k in sorted(bad)]
+            if config and name == "influxdb":
+                keys = {str(k).lower() for k in value} if isinstance(value, dict) else {"?"}
+                out += [f"influxdb: {k}" for k in sorted(keys - INFLUXDB_KEYS)]
+            if config and name == "platform" and value in FORBIDDEN_PLATFORMS:
+                out.append(f"platform: {value}")
+            if name in SERVICE_KEYS and service_refused(value):
+                out.append(f"{name}: {value}")
+            _findings(value, config, seen, out)
+    return out
+
+
+def _new_finding(new: object, live: object = None, config: bool = True) -> str | None:
+    """The first finding in `new` that `live` (what HA has now) does not
+    already have as often: the user's own content never blocks Homecraft."""
+    left = Counter(_findings(live, config, set(), []))
+    for found in _findings(new, config, set(), []):
+        if left[found]:
+            left[found] -= 1
+        else:
+            return found
     return None
 
 
 def check_yaml(path: str, text: str) -> str | None:
     """A package file (`path` only names it): the refused item, None when it passes."""
     data, why = _load(text)
-    return why or _walk(data, set())
+    return why or _new_finding(data)
 
 
 def check_tags(text: str) -> str | None:
@@ -140,19 +193,21 @@ def check_tags(text: str) -> str | None:
     return _load(text)[1]
 
 
-def check_dashboard(config: object) -> str | None:
-    """lovelace/config/save: tap/hold actions (`perform_action`, `service`).
-    Card options are not HA configuration: a card key named `rest` is fine."""
-    return _walk(config, set(), config=False)
+def check_dashboard(config: object, live: object = None) -> str | None:
+    """lovelace/config/save: tap/hold actions (`perform_action`, `service`)
+    new against `live` (the dashboard's config in HA now). Card options are
+    not HA configuration: a card key named `rest` is fine."""
+    return _new_finding(config, live, config=False)
 
 
-def check_automation_body(body: bytes | None) -> str | None:
-    """POST /api/config/(automation|script)/config/<id>: the same check as a package."""
+def check_automation_body(body: bytes | None, live: object = None) -> str | None:
+    """POST /api/config/(automation|script)/config/<id>: the package check,
+    against `live` (GET of the same id; None when it is new)."""
     try:
         data = json.loads(body or b"")
     except ValueError:
         return "neplatný JSON"
-    return _walk(data, set())
+    return _new_finding(data, live)
 
 
 def _nodes(data: object) -> list | None:
@@ -203,7 +258,8 @@ def check_nodered_flows(body: bytes | None, current: object) -> str | None:
     against `current` (GET /flows just before) must pass, and so must every
     node they reach (wires, subflow instances and their insides). Untouched
     user nodes nothing new reaches go through as they are, an exec node too.
-    A user's own tab or subflow (not Homecraft's) must not change at all."""
+    A user's own tab or subflow (not Homecraft's) and everything in it must
+    arrive exactly as it is live, and nothing new may go into it."""
     try:
         new = _nodes(json.loads(body or b""))
     except ValueError:
@@ -221,12 +277,19 @@ def check_nodered_flows(body: bytes | None, current: object) -> str | None:
         for i, n in live.items()
         if n.get("type") == "tab" and str(n.get("info") or "").startswith("ha-builder:")
     }
+    users = {  # the user's tabs and subflows
+        i
+        for i, n in live.items()
+        if n.get("type") in ("tab", "subflow")
+        and not any(i == t or str(i).startswith(t + "_") for t in ours)
+    }
+    for i, n in live.items():
+        if (i in users or n.get("z") in users) and by_id.get(i) != n:
+            return f"změna uživatelova obsahu {i}"
     todo = [n for n in new if live.get(n["id"]) != n]
     for node in todo:
-        old = live.get(node["id"])
-        if old is not None and old.get("type") in ("tab", "subflow"):
-            if not any(node["id"] == t or node["id"].startswith(t + "_") for t in ours):
-                return f"změna uživatelova {old.get('type')} {node['id']}"
+        if node.get("z") in users:
+            return f"uzel {node['id']} v uživatelově {live[node['z']].get('type')} {node['z']}"
     seen: set[str] = set()
     while todo:
         node = todo.pop()
@@ -247,6 +310,28 @@ def check_nodered_flows(body: bytes | None, current: object) -> str | None:
     return None
 
 
+_VAR_RE = re.compile(r"\$\{[^}]*\}")
+
+
+def _strings(value: object) -> bool:
+    return isinstance(value, list) and all(isinstance(v, str) for v in value)
+
+
+def _webrtc_ok(value: object) -> bool:
+    """`webrtc` as library/go2rtc writes it: listen, candidates, ice_servers[].urls."""
+    if not isinstance(value, dict) or not value.keys() <= {"listen", "candidates", "ice_servers"}:
+        return False
+    servers = value.get("ice_servers", [])
+    return (
+        isinstance(value.get("listen", ""), str)
+        and _strings(value.get("candidates", []))
+        and isinstance(servers, list)
+        and all(
+            isinstance(s, dict) and s.keys() == {"urls"} and _strings(s["urls"]) for s in servers
+        )
+    )
+
+
 def check_go2rtc_config(body: bytes | None, current: str) -> str | None:
     """POST /api/config rewrites the whole go2rtc.yaml: only GO2RTC_KEYS may
     differ from `current` (GET /api/config just before, "" when there is none);
@@ -258,6 +343,10 @@ def check_go2rtc_config(body: bytes | None, current: str) -> str | None:
         return "neplatný YAML"
     if not isinstance(new, dict) or not isinstance(old, dict):
         return "go2rtc.yaml, který není mapa"
+    if set(_VAR_RE.findall((body or b"").decode())) - set(_VAR_RE.findall(current)):
+        return "proměnná ${…}"  # go2rtc expands ${ENV} from the add-on's environment
+    if "webrtc" in new and new["webrtc"] != old.get("webrtc") and not _webrtc_ok(new["webrtc"]):
+        return "tvar klíče webrtc"
     for key in [*old, *(k for k in new if k not in old)]:
         if key not in GO2RTC_KEYS and (key not in new or key not in old or new[key] != old[key]):
             return f"klíč {key}"

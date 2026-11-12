@@ -114,9 +114,7 @@ class Sessions:
             )
             await self._push({"op": "ws.msg", "session": sid, "msg": error})
             return "not_allowed"
-        if msg["type"] == "lovelace/config/save" and (
-            what := await asyncio.to_thread(content.check_dashboard, msg.get("config"))
-        ):
+        if msg["type"] == "lovelace/config/save" and (what := await self._dashboard_refused(msg)):
             e = content.refused(f"lovelace/config/save {msg.get('url_path')}", what)
             logger.info("Odmítnuto: %s", e.message)
             error = ha_error(msg.get("id"), e.code, e.message)
@@ -124,6 +122,29 @@ class Sessions:
             return e.code
         await entry[0].send_json(msg)
         return None
+
+    async def _dashboard_refused(self, msg: dict) -> str | None:
+        """Forbidden actions the saved config brings in that the dashboard in
+        HA lacks: the user's own cards never block Homecraft. The live config
+        comes over a session of its own, only when the new one has any."""
+        config = msg.get("config")
+        if not await asyncio.to_thread(content.check_dashboard, config):
+            return None
+        ws = await self._connect()
+        try:
+            await ws.send_json(
+                {"id": 1, "type": "lovelace/config", "url_path": msg.get("url_path")}
+            )
+            while True:
+                reply = await ws.receive_json(timeout=AUTH_TIMEOUT)
+                if isinstance(reply, dict) and reply.get("id") == 1:
+                    break
+        except (TimeoutError, aiohttp.ClientError, TypeError, ValueError) as e:
+            raise policy.OpError("ha_unreachable", type(e).__name__) from None
+        finally:
+            await ws.close()
+        live = reply.get("result") if reply.get("success") else None  # none yet: whole
+        return await asyncio.to_thread(content.check_dashboard, config, live)
 
     async def close(self, sid: str) -> None:
         entry = self._open.pop(sid, None)

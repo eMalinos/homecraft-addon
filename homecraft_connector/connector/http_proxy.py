@@ -113,16 +113,33 @@ class HttpProxy:
                     raise refused
         elif kind == "core" and method == "POST":
             route = path.split("?", 1)[0]
-            if policy.CONFIG_RE.fullmatch(route) and (
-                what := await asyncio.to_thread(content.check_automation_body, body)
-            ):
-                raise content.refused(route, what)
+            if policy.CONFIG_RE.fullmatch(route):
+                await self._check_config(route, body)
         result = await self._forward(kind, method, path, req.get("headers"), body)
         if kind == "core" and path.split("?", 1)[0] == policy.FLOW and result["status"] == 200:
             self._track_flow(result)
         elif kind == "flow" and method == "DELETE":
             self._flows.discard(ref)
         return result
+
+    async def _check_config(self, route: str, body: bytes | None) -> None:
+        """An automation/script config: only forbidden services it brings in
+        that the live config of the same id lacks (a rename fix of the user's
+        own automation passes). The GET only when the body has some at all."""
+        if not await asyncio.to_thread(content.check_automation_body, body):
+            return
+        live = await self._forward("core", "GET", route, None, None)
+        if live["status"] == 200:
+            try:
+                current = json.loads(base64.b64decode(live["body_b64"]))
+            except ValueError:
+                current = None
+        elif live["status"] == 404:  # a new automation: checked whole
+            current = None
+        else:
+            raise policy.OpError("ha_unreachable", f"GET {route}: HTTP {live['status']}")
+        if what := await asyncio.to_thread(content.check_automation_body, body, current):
+            raise content.refused(route, what)
 
     async def _check_ingress(
         self, slug: str, subpath: str, path: str, headers: object, body: bytes | None

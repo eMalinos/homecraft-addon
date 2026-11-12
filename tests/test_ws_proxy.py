@@ -12,6 +12,8 @@ from aiohttp import web
 from connector import http_proxy, settings, ws_proxy
 from connector.policy import OpError
 
+DASHBOARDS: dict[str, dict] = {}  # url_path -> live config (lovelace/config)
+
 
 @contextlib.asynccontextmanager
 async def fake_ha(monkeypatch, token="t0k"):
@@ -34,7 +36,12 @@ async def fake_ha(monkeypatch, token="t0k"):
             seen.append(cmd)
             if cmd["type"] == "close_me":  # never sent: refused by the allowlist
                 break
-            await ws.send_json({"id": cmd["id"], "type": "result", "success": True, "result": 1})
+            result = (
+                DASHBOARDS.get(cmd.get("url_path"), 1) if cmd["type"] == "lovelace/config" else 1
+            )
+            await ws.send_json(
+                {"id": cmd["id"], "type": "result", "success": True, "result": result}
+            )
         await ws.close()
         return ws
 
@@ -312,7 +319,15 @@ def test_dashboard_save_with_a_forbidden_action_is_refused(monkeypatch):
                 "není přes Homecraft Connector povolený",
             }
             assert replies[2]["success"] is True
-            assert [c["id"] for c in seen] == [2]
+            saved = [c["id"] for c in seen if c["type"] == "lovelace/config/save"]
+            assert saved == [2]
+            # the user's own card with that action, Homecraft adds a section: passes
+            monkeypatch.setitem(DASHBOARDS, "mine", bad)
+            ours = {"views": [*bad["views"], {"cards": [{"type": "tile"}]}]}
+            msg = {"id": 3, "type": "lovelace/config/save", "url_path": "mine", "config": ours}
+            await sessions.send(sid, msg)
+            await _until(pushed, 3)
+            assert pushed[-1]["msg"] == {"id": 3, "type": "result", "success": True, "result": 1}
             await sessions.close_all()
 
     asyncio.run(scenario())

@@ -122,6 +122,21 @@ def test_automation_body():
     assert content.check_automation_body(b"{") == "neplatný JSON"
 
 
+def test_automation_body_against_the_live_config():
+    """A rename fix of the user's own automation: its forbidden action was there before."""
+    live = {
+        "triggers": [{"entity_id": "sensor.old"}],
+        "actions": [{"action": "hassio.addon_restart"}],
+    }
+    renamed = json.dumps({**live, "triggers": [{"entity_id": "sensor.new"}]}).encode()
+    assert content.check_automation_body(renamed, live) is None
+    twice = {**live, "actions": live["actions"] * 2}  # one more than live: new
+    assert content.check_automation_body(json.dumps(twice).encode(), live) == (
+        "action: hassio.addon_restart"
+    )
+    assert content.check_automation_body(renamed, None) == "action: hassio.addon_restart"
+
+
 def test_dashboard():
     ok = {"views": [{"cards": [{"type": "tile", "tap_action": {"action": "more-info"}}]}]}
     assert content.check_dashboard(ok) is None
@@ -131,6 +146,47 @@ def test_dashboard():
     ):
         bad = {"views": [{"cards": [{"type": "button", "hold_action": action}]}]}
         assert content.check_dashboard(bad) is not None
+        assert content.check_dashboard(bad, bad) is None  # the user's own card stays
+        ours = {"views": [*bad["views"], {"cards": [{"type": "tile"}]}]}
+        assert content.check_dashboard(ours, bad) is None  # Homecraft adds a section
+
+
+@pytest.mark.parametrize(
+    "text, refused",
+    [
+        ("shell_command 2:\n  x: id\n", "shell_command"),
+        ("Rest_Command evil:\n  x: {url: x}\n", "rest_command"),
+        *[(f"{k}:\n  x: y\n", k) for k in ("frontend", "lovelace", "ffmpeg", "logger")],
+        ("homeassistant:\n  media_dirs: {m: /}\n", "homeassistant: media_dirs"),
+        ("homeassistant:\n  customize_glob: {}\n", "homeassistant: customize_glob"),
+        ("influxdb:\n  host: evil.example\n", "influxdb: host"),
+        ("influxdb:\n", "influxdb: ?"),
+        *[
+            (f"script:\n  s:\n    sequence:\n      - action: {json.dumps(a)}\n", f"action: {a}")
+            for a in (
+                "downloader.download_file",
+                "backup.create",
+                "update.install",
+                "homeassistant.stop",
+                "homeassistant.restart",
+                "homeassistant.{{ x }}",
+                "recorder.purge",
+                "recorder.purge_entities",
+                "recorder.disable",
+            )
+        ],
+    ],
+)
+def test_refused_second_round(text, refused):
+    assert content.check_yaml("packages/x.yaml", text) == refused
+
+
+def test_the_librarys_services_pass():
+    ok = "influxdb:\n  include: {entity_globs: [sensor.hfb_ltm_*]}\n  ignore_attributes: [icon]\n"
+    assert content.check_yaml("packages/x.yaml", ok) is None
+    assert content.check_yaml("packages/x.yaml", "recorder:\n  purge_keep_days: 30\n") is None
+    for a in ("homeassistant.update_entity", "recorder.get_statistics", "notify.mobile_app_x"):
+        assert not content.service_refused(a)
 
 
 USER = [
@@ -169,10 +225,9 @@ def check(nodes, live=()) -> str | None:
 def test_nodered_only_added_or_changed_nodes_are_checked():
     assert check(USER + OURS, USER) is None
     assert content.check_nodered_flows(json.dumps(USER + OURS).encode(), USER) is None  # API v1
-    assert check(OURS, USER) is None  # the user's tab removed
     assert check(USER + OURS, USER + OURS) is None  # the next Apply
-    changed = [*USER[:1], {**USER[1], "command": "curl evil"}]
-    assert check(changed, USER) == "uzel exec"
+    changed = [*USER[:1], {**USER[1], "command": "curl evil"}, *USER[2:]]
+    assert check(changed, USER) == "změna uživatelova obsahu u_exec"
     assert content.check_nodered_flows(flows(USER), None) == "uzel exec"  # nothing to compare
 
 
@@ -189,13 +244,19 @@ def test_nodered_reach_through_into_user_nodes():
 
 def test_nodered_user_tabs_and_subflows_stay_as_they_are():
     enabled = [{**USER[0], "disabled": False}, *USER[1:]]
-    assert check(enabled + OURS, USER) == "změna uživatelova tab u_tab"
+    assert check(enabled + OURS, USER) == "změna uživatelova obsahu u_tab"
     rewired = [*USER[:3], {**USER[3], "in": []}, USER[4]]
-    assert check(rewired + OURS, USER) == "změna uživatelova subflow u_sf"
+    assert check(rewired + OURS, USER) == "změna uživatelova obsahu u_sf"
+    assert check(OURS, USER) == "změna uživatelova obsahu u_tab"  # dropped
+    assert check([*USER[:4], *OURS], USER) == "změna uživatelova obsahu u_sf_x"  # dropped
     ours_changed = [{**OURS[0], "disabled": True}, {**OURS[1], "name": "x"}, *OURS[2:]]
     assert check(USER + ours_changed, USER + OURS) is None
     hijack = [{**USER[0], "info": "ha-builder: x@1", "disabled": False}, *USER[1:]]
-    assert check(hijack, USER) == "změna uživatelova tab u_tab"  # the live tab decides
+    assert check(hijack, USER) == "změna uživatelova obsahu u_tab"  # the live tab decides
+    into = {"id": "hfb_t_n", "type": "inject", "z": "u_tab"}
+    assert check(USER + OURS + [into], USER) == "uzel hfb_t_n v uživatelově tab u_tab"
+    into_sf = {**into, "z": "u_sf"}
+    assert check(USER + OURS + [into_sf], USER) == "uzel hfb_t_n v uživatelově subflow u_sf"
 
 
 LIBS = [{"var": "cp", "module": "child_process"}]
@@ -268,6 +329,11 @@ def test_go2rtc_only_the_librarys_keys_change():
     assert content.check_go2rtc_config(b"webrtc: {listen: ':8555'}\n", "") is None  # no file
     without_ours = GO2RTC.split("webrtc:")[0]
     assert content.check_go2rtc_config(without_ours.encode(), GO2RTC) is None
+    library = 'webrtc:\n  listen: ":8555"\n  candidates: ["10.0.0.2:8555"]\n'
+    library += '  ice_servers:\n    - urls: ["stun:stun.l.google.com:19302"]\n'
+    assert content.check_go2rtc_config(library.encode(), "") is None
+    with_var = 'api: {username: "${USER}"}\n' + library
+    assert content.check_go2rtc_config(with_var.encode(), with_var) is None  # the user's own
 
 
 @pytest.mark.parametrize(
@@ -281,6 +347,13 @@ def test_go2rtc_only_the_librarys_keys_change():
         (GO2RTC.replace('api: {listen: ":1984"}', ""), "klíč api"),  # dropped
         ("- x\n", "go2rtc.yaml, který není mapa"),
         ("a: [\n", "neplatný YAML"),
+        (GO2RTC.replace('listen: ":8555"', 'listen: "${HOME}"'), "proměnná ${…}"),
+        (GO2RTC.replace('listen: ":8555"', "filters: {candidates: [x]}"), "tvar klíče webrtc"),
+        (GO2RTC.replace('listen: ":8555"', "listen: [1]"), "tvar klíče webrtc"),
+        (
+            GO2RTC.replace('listen: ":8555"', "ice_servers: [{urls: [x], credential: y}]"),
+            "tvar klíče webrtc",
+        ),
     ],
 )
 def test_go2rtc_refused(evil, refused):
