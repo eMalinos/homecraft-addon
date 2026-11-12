@@ -166,12 +166,13 @@ _FLOW_STEP_RE = re.compile(rf"{FLOW}/({_ID})")
 # Config flows Homecraft may start (influxdb_admin).
 FLOW_HANDLERS = frozenset({"influxdb"})
 INFLUXDB_ADDON_HOST = "a0d7b954-influxdb"
+# references.py: where an entity is used, and fixing it on a rename
+CONFIG_RE = re.compile(rf"/api/config/(automation|script)/config/{_ID}")
 _CORE = [
     (re.compile(r"/api/"), {"GET"}),  # connection test
     (re.compile(r"/api/config/core/check_config"), {"POST"}),
     (re.compile(rf"/api/config/config_entries/entry/{_ID}/reload"), {"POST"}),
-    # references.py: where an entity is used, and fixing it on a rename
-    (re.compile(rf"/api/config/(automation|script)/config/{_ID}"), {"GET", "POST"}),
+    (CONFIG_RE, {"GET", "POST"}),
 ]
 INGRESS_RE = re.compile(r"/api/hassio_ingress/([A-Za-z0-9_-]+)(/.*)?")
 # What the backend's add-on clients send through ingress, per add-on.

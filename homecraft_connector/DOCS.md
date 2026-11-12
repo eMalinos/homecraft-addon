@@ -60,6 +60,68 @@ InfluxDB a Grafana), několik REST adres (kontrola konfigurace, integrace
 InfluxDB) a soubory jen v `packages/`, `custom_templates/` a `themes/`
 (`configuration.yaml` jen ke čtení). Cokoli jiného odmítne s chybou `not_allowed`.
 
+## Bezpečnost
+
+**Kam** (allowlist, viz výše) a **co**: doplněk před zápisem zkontroluje obsah
+a odmítne s chybou `refused_content` vše, co by spouštělo příkazy nebo posílalo
+data ven (se záznamem v auditu panelu). Seznamy jsou pevně v kódu
+a nastavení je nerozšíří. Je to denylist: díru zužuje, nezavírá (viz limity).
+
+- **Soubory v `packages/`** se rozparsují jako YAML. Odmítne se:
+  - klíč `shell_command`, `command_line`, `python_script`, `pyscript`,
+    `rest_command`, `rest`, `scrape`, `panel_custom`, `panel_iframe`, `http`,
+    `frontend`, `lovelace`, `ffmpeg`, `logger`, i s příponou
+    (`shell_command 2:`);
+  - `influxdb:` s čímkoli kromě `include`, `exclude` a `ignore_attributes`
+    (kam data jdou, nastavuje config flow integrace);
+  - `homeassistant:` s `auth_providers`, `packages`, `allowlist_external_dirs`,
+    `allowlist_external_urls`, `media_dirs` nebo `customize_glob`
+    (`customize` je v pořádku);
+  - položka s `platform: command_line|shell_command|rest|scrape`;
+  - akce (`action`/`service`/`perform_action`) v doménách `shell_command`,
+    `rest_command`, `python_script`, `pyscript`, `hassio`, `downloader`,
+    `backup`, služby `update.install`, `homeassistant.stop|restart`,
+    `recorder.purge*` a `recorder.disable`, i akce, kterou může šablona na
+    zakázanou změnit;
+  - jakýkoli tag HA (`!include*`, `!secret`, `!env_var`, `!input`): načetly by
+    obsah, který kontrolou neprošel. Knihovna žádný nepoužívá. Neplatný YAML.
+  `recorder:` povolený zůstává, knihovna ho potřebuje (`purge_keep_days`).
+- **`themes/`**: kód nespouští (CSS proměnné), ale loader HA v nich tagy
+  vyhodnocuje, proto se odmítnou stejné tagy. `custom_templates/` jsou soubory
+  Jinja, ne YAML. Soubor `secrets.yaml` nelze zapsat nikam.
+- **Automatizace a skripty přes REST** projdou stejnou kontrolou, ale proti
+  živé konfiguraci stejného id: odmítne se jen zakázaná akce, kterou tam
+  uživatel ještě nemá (přejmenování entity v jeho automatizaci projde).
+- **Dashboardy** (`lovelace/config/save`): akce karet (`tap_action`,
+  `hold_action`…) se zakázanými službami, které v živém dashboardu ještě
+  nejsou. Vlastní karty uživatele Homecraft nikdy neblokují.
+- **Node-RED** (`POST /flows` posílá všechny flow): kontrolují se nové a změněné
+  uzly a vše, kam vedou (dráty, instance subflow i jejich vnitřek). Smí být jen
+  typu, který používá knihovna Homecraftu, uzel `exec` nikdy. `api-call-service`
+  jen ve verzi 7, se `blockInputOverrides` a službou pevně v uzlu (ne ze
+  zprávy), na kterou se nevztahuje denylist. `function` bez modulů (`libs`).
+  Záložky a subflow uživatele i všechny jejich uzly musí přijít přesně jako
+  v živém Node-RED (nic změněného, smazaného ani přidaného dovnitř).
+  Instalace modulů (`POST /nodes`) povolená není.
+- **go2rtc** (`POST /api/config` přepisuje celý soubor): Homecraft smí změnit jen
+  klíč `webrtc`, a to jen ve tvaru, jaký zapisuje knihovna (`listen`,
+  `candidates`, `ice_servers[].urls`). Ostatní klíče (`api`, `streams` i
+  s `exec:`, `echo:`, `expr:`…) musí zůstat přesně jak jsou: nesmí se změnit,
+  smazat ani vynulovat. Nová proměnná `${…}` (go2rtc ji doplní z prostředí)
+  se odmítne.
+
+**Známé limity** (uzavře až úroveň 3, podepsané balíčky):
+
+- Uzel Node-RED `function` spouští JavaScript; jeho `vm` není hranice.
+  Kontrola se týká typů uzlů, ne jejich kódu.
+- Uzel `http request` (hlídání bran Shelly ve feature Topení) posílá požadavky
+  na adresu ze zprávy.
+- Nové uzly mohou na flow uživatele působit nepřímo: přes uzly `catch`
+  a `status`, vyvolané události a změny stavů entit.
+- JavaScript v šablonách vlastních karet dashboardu (`[[[ ]]]` v button-card,
+  HTML karty) se nekontroluje.
+- Šablony Jinja v YAML se nekontrolují (běží v sandboxu HA).
+
 ## Log při startu (self-check)
 
 Doplněk při startu ověří, k čemu má přístup, a do logu zapíše `OK` / `FAIL` /

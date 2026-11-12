@@ -12,6 +12,8 @@ from aiohttp import web
 from connector import http_proxy, settings, ws_proxy
 from connector.policy import OpError
 
+DASHBOARDS: dict[str, dict] = {}  # url_path -> live config (lovelace/config)
+
 
 @contextlib.asynccontextmanager
 async def fake_ha(monkeypatch, token="t0k"):
@@ -34,7 +36,12 @@ async def fake_ha(monkeypatch, token="t0k"):
             seen.append(cmd)
             if cmd["type"] == "close_me":  # never sent: refused by the allowlist
                 break
-            await ws.send_json({"id": cmd["id"], "type": "result", "success": True, "result": 1})
+            result = (
+                DASHBOARDS.get(cmd.get("url_path"), 1) if cmd["type"] == "lovelace/config" else 1
+            )
+            await ws.send_json(
+                {"id": cmd["id"], "type": "result", "success": True, "result": result}
+            )
         await ws.close()
         return ws
 
@@ -284,5 +291,43 @@ def test_paused_sessions_push_nothing_and_close_all_notifies(monkeypatch):
             assert seen and pushed == []
             await sessions.close_all(notify=True)
             assert pushed == [{"op": "ws.closed", "session": sid}]
+
+    asyncio.run(scenario())
+
+
+def test_dashboard_save_with_a_forbidden_action_is_refused(monkeypatch):
+    async def scenario():
+        async with fake_ha(monkeypatch) as (seen, _), aiohttp.ClientSession() as http:
+            pushed: list[dict] = []
+
+            async def push(data):
+                pushed.append(data)
+
+            sessions = ws_proxy.Sessions(http, push)
+            sid = (await sessions.open())["session"]
+            tap = {"action": "perform-action", "perform_action": "shell_command.x"}
+            bad = {"views": [{"cards": [{"type": "button", "tap_action": tap}]}]}
+            ok = {"views": [{"cards": [{"type": "tile", "entity": "light.a"}]}]}
+            for i, config in ((1, bad), (2, ok)):
+                msg = {"id": i, "type": "lovelace/config/save", "url_path": "d", "config": config}
+                await sessions.send(sid, msg)
+            await _until(pushed, 2)
+            replies = {p["msg"]["id"]: p["msg"] for p in pushed}
+            assert replies[1]["error"] == {
+                "code": "refused_content",
+                "message": "lovelace/config/save d: perform_action: shell_command.x "
+                "není přes Homecraft Connector povolený",
+            }
+            assert replies[2]["success"] is True
+            saved = [c["id"] for c in seen if c["type"] == "lovelace/config/save"]
+            assert saved == [2]
+            # the user's own card with that action, Homecraft adds a section: passes
+            monkeypatch.setitem(DASHBOARDS, "mine", bad)
+            ours = {"views": [*bad["views"], {"cards": [{"type": "tile"}]}]}
+            msg = {"id": 3, "type": "lovelace/config/save", "url_path": "mine", "config": ours}
+            await sessions.send(sid, msg)
+            await _until(pushed, 3)
+            assert pushed[-1]["msg"] == {"id": 3, "type": "result", "success": True, "result": 1}
+            await sessions.close_all()
 
     asyncio.run(scenario())
