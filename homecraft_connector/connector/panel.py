@@ -79,7 +79,8 @@ async def _status(request: web.Request) -> web.Response:
             "last_error": client.last_error,
             "last_connected": client.last_connected,
             "pairing_code": request.app[PAIRING_CODE],
-            "token_set": access_token.load() is not None,
+            "token_set": access_token.active() is not None,
+            "token_pending": access_token.pending(),  # pushed by Homecraft, not yet through Access
             "token_updated_at": access_token.updated_by_homecraft(),
             "paused": client.paused,
         }

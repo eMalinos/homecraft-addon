@@ -24,7 +24,7 @@ def test_save_status_delete(run_panel, agent):
     assert agent._wake.is_set()  # saving reconnects at once
     assert not any(SECRET in b or "client-id.access" in b for b in bodies)
     assert deleted == 200 and after["token_set"] is False
-    assert access_token.load() is None
+    assert access_token.active() is None
 
 
 def test_bad_token_is_refused_without_echo(run_panel):
@@ -35,7 +35,7 @@ def test_bad_token_is_refused_without_echo(run_panel):
 
     status, body, typed = run_panel(scenario)
     assert status == 400 and SECRET not in body and typed == 400
-    assert access_token.load() is None
+    assert access_token.active() is None
 
 
 def test_change_replaces_the_token(run_panel):
@@ -44,17 +44,21 @@ def test_change_replaces_the_token(run_panel):
         await http.post("/api/access-token", json={"token": "b:new"}, headers=CSRF)
 
     run_panel(scenario)
-    assert access_token.load() == ("b", "new")
+    assert access_token.active() == ("b", "new")
 
 
 def test_status_says_when_homecraft_updated_the_token(run_panel):
     async def status(http):
         return await (await http.get("/api/status")).json()
 
-    access_token.save(TOKEN)
-    assert run_panel(status)["token_updated_at"] is None
+    access_token.save("old.access:s1")
+    first = run_panel(status)
+    assert first["token_updated_at"] is None and first["token_pending"] is False
     access_token.stage(TOKEN)
-    access_token.commit()
+    staged = run_panel(status)
+    assert staged["token_pending"] is True and staged["token_updated_at"] is None
+    access_token.commit(access_token.parse(TOKEN))
     body = run_panel(status)
-    assert body["token_set"] is True and isinstance(body["token_updated_at"], float)
-    assert SECRET not in str(body)
+    assert body["token_set"] is True and body["token_pending"] is False
+    assert isinstance(body["token_updated_at"], float)
+    assert SECRET not in str([first, staged, body])

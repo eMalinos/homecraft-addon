@@ -96,6 +96,7 @@ td.ok { color: var(--ok); } td.bad { color: var(--bad); } td.warn { color: var(-
     <div id="tokenSet" hidden>
       <div class="row"><span class="badge on">Token nastaven ✓</span>
         <span id="tokenUpdated" class="muted" hidden></span>
+        <span id="tokenPending" class="muted" hidden>Nový token od Homecraftu čeká na ověření</span>
         <button id="tokenChange">Změnit</button>
         <button id="tokenDelete" class="danger">Smazat</button></div>
     </div>
@@ -165,6 +166,7 @@ async function refreshStatus() {
   $("tokenForm").hidden = s.token_set && !editingToken;
   $("tokenCancel").hidden = !s.token_set;
   $("tokenUpdated").hidden = !s.token_updated_at;
+  $("tokenPending").hidden = !s.token_pending;
   $("tokenUpdated").textContent = "(aktualizován " + fmtTime(s.token_updated_at) + " Homecraftem)";
 }
 
