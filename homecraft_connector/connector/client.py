@@ -1,6 +1,4 @@
-"""The outgoing connection to Homecraft: challenge/hello, request loop, reconnect.
-
-Operations come with #555; until then every request is refused."""
+"""The outgoing connection to Homecraft: challenge/hello, request loop, reconnect."""
 
 import asyncio
 import json
@@ -12,7 +10,7 @@ import uuid
 import aiohttp
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from . import access_token, identity
+from . import access_token, files, http_proxy, identity, policy, ws_proxy
 
 logger = logging.getLogger(__name__)
 
@@ -102,7 +100,7 @@ class Client:
             ) as ws:
                 started = time.monotonic()
                 logger.info("Připojeno k %s", self.server_url)
-                await self._serve(ws)
+                await self._serve(ws, session)
                 code = ws.close_code
         except aiohttp.WSServerHandshakeError as e:
             if access_refused(e):
@@ -122,33 +120,99 @@ class Client:
         logger.info("Spojení s Homecraftem skončilo (kód %s)", code)
         return False
 
-    async def _serve(self, ws: aiohttp.ClientWebSocketResponse) -> None:
-        async for msg in ws:
-            if msg.type != aiohttp.WSMsgType.TEXT:
-                continue
-            try:
-                data = json.loads(msg.data)
-            except ValueError:
-                continue
-            if not isinstance(data, dict):
-                continue
-            if data.get("op") == "challenge":
-                try:
-                    sig = identity.sign_hello(self.agent_id, self.key, data["nonce"])
-                except (KeyError, TypeError, ValueError):
-                    logger.warning("Neplatná výzva od serveru")
-                    return
-                await ws.send_json(
-                    {
-                        "op": "hello",
-                        "agent_id": str(self.agent_id),
-                        "version": self.version,
-                        "sig": sig,
-                    }
-                )
-            elif "id" in data:
-                await ws.send_json(self._reply(data))
+    async def _serve(
+        self, ws: aiohttp.ClientWebSocketResponse, http: aiohttp.ClientSession
+    ) -> None:
+        lock = asyncio.Lock()
 
-    def _reply(self, request: dict) -> dict:
-        code = "paused" if self.paused else "not_implemented"
-        return {"id": request["id"], "ok": False, "error": {"code": code, "message": ""}}
+        async def send(data: dict) -> None:
+            async with lock:
+                await ws.send_json(data)
+
+        sessions = ws_proxy.Sessions(http, send)
+        tasks: set[asyncio.Task] = set()
+
+        async def respond(request: dict) -> None:
+            await send(await self._reply(request, http, sessions))
+
+        try:
+            async for msg in ws:
+                if msg.type != aiohttp.WSMsgType.TEXT:
+                    continue
+                try:
+                    data = json.loads(msg.data)
+                except ValueError:
+                    continue
+                if not isinstance(data, dict):
+                    continue
+                if data.get("op") == "challenge":
+                    try:
+                        sig = identity.sign_hello(self.agent_id, self.key, data["nonce"])
+                    except (KeyError, TypeError, ValueError):
+                        logger.warning("Neplatná výzva od serveru")
+                        return
+                    await send(
+                        {
+                            "op": "hello",
+                            "agent_id": str(self.agent_id),
+                            "version": self.version,
+                            "sig": sig,
+                        }
+                    )
+                elif "id" in data:
+                    if data.get("op") in ("ws.send", "ws.close"):
+                        await respond(data)  # inline: a session keeps its message order
+                    else:
+                        task = asyncio.create_task(respond(data))
+                        tasks.add(task)
+                        task.add_done_callback(tasks.discard)
+        finally:
+            for task in list(tasks):
+                task.cancel()
+            await sessions.close_all()
+
+    async def _reply(
+        self, request: dict, http: aiohttp.ClientSession, sessions: ws_proxy.Sessions
+    ) -> dict:
+        rid, op = request["id"], request.get("op")
+        if self.paused:
+            return _error(rid, "paused", "")
+        try:
+            result = await _dispatch(op, request, http, sessions)
+        except policy.OpError as e:
+            if e.code == "not_allowed":
+                logger.info("Odmítnuto: %s", e.message)
+            return _error(rid, e.code, e.message)
+        except (KeyError, TypeError, ValueError, AttributeError) as e:
+            return _error(rid, "bad_request", f"{op}: {type(e).__name__}")
+        except Exception as e:
+            # The type only: messages can carry paths, payloads or HA's answers.
+            logger.warning("Operace %s selhala: %s", op, type(e).__name__)
+            return _error(rid, "internal", type(e).__name__)
+        return {"id": rid, "ok": True, "result": result}
+
+
+async def _dispatch(
+    op: object, req: dict, http: aiohttp.ClientSession, sessions: ws_proxy.Sessions
+) -> object:
+    if op == "ws.open":
+        return await sessions.open()
+    if op == "ws.send":
+        return await sessions.send(req["session"], req["msg"])
+    if op == "ws.close":
+        return await sessions.close(req["session"])
+    if op == "http":
+        return await http_proxy.handle(http, req)
+    if op == "file.read":
+        return await asyncio.to_thread(files.read, req["path"])
+    if op == "file.write":
+        return await asyncio.to_thread(files.write, req["path"], req["text"])
+    if op == "file.delete":
+        return await asyncio.to_thread(files.delete, req["path"])
+    if op == "file.list":
+        return await asyncio.to_thread(files.list_dir, req["path"])
+    raise policy.OpError("unknown_op", str(op)[:64])
+
+
+def _error(rid: object, code: str, message: str) -> dict:
+    return {"id": rid, "ok": False, "error": {"code": code, "message": message}}
