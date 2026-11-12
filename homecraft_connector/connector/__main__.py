@@ -2,8 +2,6 @@ import asyncio
 import logging
 import sys
 
-import aiohttp
-
 from . import audit, fingerprint, identity, panel, selfcheck, settings, state
 from .client import Client
 
@@ -34,9 +32,9 @@ async def main() -> None:
     paused = opts["paused"] or state.load_paused()
     if paused:
         logger.info("Homecraft je pozastaven")
-    async with aiohttp.ClientSession(timeout=selfcheck.TIMEOUT) as session:
-        hello_extra = await fingerprint.collect(session)
-    client = Client(server_url, agent_id, key, settings.version(), paused, hello_extra)
+    # The panel first (the verification code at once); the fingerprints are
+    # looked up before each connection attempt until all are found.
+    client = Client(server_url, agent_id, key, settings.version(), paused, fingerprint.Collector())
     await panel.start(client, code, verification)
     try:
         await selfcheck.run()

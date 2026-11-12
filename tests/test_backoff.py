@@ -5,36 +5,53 @@ import uuid
 import aiohttp
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
+from connector import client as client_module
 from connector.client import Backoff, Client, access_refused
 
 
 def test_outage_doubles_up_to_a_minute():
     b = Backoff()
-    assert [b.next(refused=False) for _ in range(9)] == [1, 2, 4, 8, 16, 32, 60, 60, 60]
+    assert [b.next("outage") for _ in range(9)] == [1, 2, 4, 8, 16, 32, 60, 60, 60]
 
 
 def test_refusal_slows_to_hourly():
     b = Backoff()
-    minutes = [b.next(refused=True) / 60 for _ in range(6)]
+    minutes = [b.next("refused") / 60 for _ in range(6)]
     assert minutes == [1, 5, 15, 60, 60, 60]
+
+
+def test_pending_retries_soon_then_falls_back_to_refused(monkeypatch):
+    now = [1000.0]
+    monkeypatch.setattr(client_module.time, "monotonic", lambda: now[0])
+    b = Backoff()
+    assert [b.next("pending") for _ in range(3)] == [10, 30, 30]
+    now[0] += client_module.PENDING_LIFETIME
+    assert [b.next("pending") / 60 for _ in range(2)] == [1, 5]  # REFUSED_DELAYS
+
+
+def test_entering_pending_starts_at_ten_seconds():
+    b = Backoff()
+    b.next("pending"), b.next("pending")
+    assert b.next("outage") == 1
+    assert [b.next("pending") for _ in range(2)] == [10, 30]
 
 
 def test_reset_starts_over():
     b = Backoff()
-    b.next(refused=False), b.next(refused=True), b.next(refused=True)
+    b.next("outage"), b.next("refused"), b.next("refused")
     b.reset()
-    assert (b.next(refused=False), b.next(refused=True)) == (1, 60)
+    assert (b.next("outage"), b.next("refused")) == (1, 60)
 
 
 def test_reconnect_now_cuts_the_wait():
     async def scenario():
         client = Client("ws://x", uuid.uuid4(), Ed25519PrivateKey.generate(), "0.1.0")
-        client.backoff.next(refused=True)
+        client.backoff.next("refused")
         start = time.monotonic()
         asyncio.get_running_loop().call_later(0.05, client.reconnect_now)
         await client.wait(3600)
         assert time.monotonic() - start < 1
-        assert client.backoff.next(refused=True) == 60  # backoff reset too
+        assert client.backoff.next("refused") == 60  # backoff reset too
 
     asyncio.run(scenario())
 

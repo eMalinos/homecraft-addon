@@ -14,13 +14,14 @@ from connector.client import Client
 HELLOS: list[dict] = []  # every hello `against` received
 
 
-async def against(script, agent=None):
-    """Run one agent connection against `script(ws, agent)`; returns (refused, agent)."""
+async def against(script, agent=None, before_challenge=0.0):
+    """Run one agent connection against `script(ws, agent)`; returns (outcome, agent)."""
     agent = agent or Client("ws://x", uuid.uuid4(), Ed25519PrivateKey.generate(), "t")
 
     async def handler(request):
         ws = web.WebSocketResponse()
         await ws.prepare(request)
+        await asyncio.sleep(before_challenge)
         await ws.send_json({"op": "challenge", "nonce": "AAAA"})
         HELLOS.append(await ws.receive_json())
         assert HELLOS[-1]["op"] == "hello"
@@ -82,7 +83,7 @@ def test_reconnect_now_drops_the_open_connection():
     refused, agent = asyncio.run(against(script))
     assert out["connected"] is True
     assert out["msg"].type == aiohttp.WSMsgType.CLOSE  # the agent closed it
-    assert refused is False and agent.last_error is None and agent._wake.is_set()
+    assert refused == "outage" and agent.last_error is None and agent._wake.is_set()
     assert agent.connected is False and agent.last_connected is not None
 
 
@@ -91,7 +92,7 @@ def test_not_connected_until_the_hello_is_accepted(monkeypatch):
         await ws.close(code=client.CLOSE_UNAUTHORIZED)
 
     refused, agent = asyncio.run(against(unpaired))
-    assert refused is True and agent.last_connected is None
+    assert refused == "refused" and agent.last_connected is None
     assert agent.last_error.startswith("Agent není spárovaný")
 
     monkeypatch.setattr(client, "HELLO_ACCEPTED_AFTER", 0.05)
@@ -109,7 +110,13 @@ def test_not_connected_until_the_hello_is_accepted(monkeypatch):
 
 def test_hello_carries_the_public_key_and_extra():
     key = Ed25519PrivateKey.generate()
-    agent = Client("ws://x", uuid.uuid4(), key, "t", hello_extra={"ha_name": "Domov"})
+    calls = []
+
+    async def extra():
+        calls.append(1)
+        return {"ha_name": "Domov"}
+
+    agent = Client("ws://x", uuid.uuid4(), key, "t", hello_extra=extra)
 
     async def quiet(ws, a):
         pass
@@ -117,34 +124,66 @@ def test_hello_carries_the_public_key_and_extra():
     asyncio.run(against(quiet, agent))
     assert HELLOS[-1]["public_key"] == identity.public_b64(key)
     assert HELLOS[-1]["ha_name"] == "Domov"
+    asyncio.run(against(quiet, agent))
+    assert calls == [1, 1]  # asked before every attempt (it caches by itself)
 
 
-def test_pending_approval_retries_soon_and_clears(monkeypatch):
+async def pending(ws, a):
+    await ws.close(code=client.CLOSE_PENDING)
+
+
+def test_pending_approval_only_while_the_backend_says_so(monkeypatch):
     monkeypatch.setattr(client, "HELLO_ACCEPTED_AFTER", 0.05)
-
-    async def pending(ws, a):
-        await ws.close(code=client.CLOSE_PENDING)
-
-    refused, agent = asyncio.run(against(pending))
-    assert refused is False and agent.pending_approval is True
+    outcome, agent = asyncio.run(against(pending))
+    assert outcome == "pending" and agent.pending_approval is True
     assert agent.last_error.startswith("Čeká na schválení")
-    assert agent._pending_attempt is True
-    assert [agent.backoff.pending() for _ in range(3)] == [10, 30, 30]
 
     async def accepted(ws, a):
         await asyncio.sleep(0.2)  # still open after the hello = accepted
 
-    asyncio.run(against(accepted, agent))
-    assert agent.pending_approval is False and agent._pending_attempt is False
-
-    asyncio.run(against(pending, agent))
-    assert agent.pending_approval is True
+    assert asyncio.run(against(accepted, agent))[0] == "outage"
+    assert agent.pending_approval is False
 
     async def unpaired(ws, a):
         await ws.close(code=client.CLOSE_UNAUTHORIZED)
 
-    assert asyncio.run(against(unpaired, agent))[0] is True
-    assert agent.pending_approval is False and agent._pending_attempt is False
+    async def other(ws, a):
+        await ws.close(code=4000)
+
+    for script in (unpaired, other):
+        asyncio.run(against(pending, agent))
+        assert agent.pending_approval is True
+        asyncio.run(against(script, agent))
+        assert agent.pending_approval is False
+
+    # Homecraft unreachable (outage) clears it too.
+    asyncio.run(against(pending, agent))
+    agent.server_url = "ws://127.0.0.1:1/ws"
+
+    async def unreachable():
+        async with aiohttp.ClientSession() as session:
+            return await agent._connect_once(session)
+
+    assert asyncio.run(unreachable()) == "outage" and agent.pending_approval is False
+
+
+def test_accepted_timer_starts_after_the_hello(monkeypatch):
+    monkeypatch.setattr(client, "HELLO_ACCEPTED_AFTER", 0.05)
+    # A slow challenge: the hello goes out late, the 4403 right after it.
+    outcome, agent = asyncio.run(against(pending, before_challenge=0.3))
+    assert outcome == "pending" and agent.last_connected is None and not agent.connected
+
+
+def test_slow_pending_close_is_not_a_connection(monkeypatch):
+    monkeypatch.setattr(client, "HELLO_ACCEPTED_AFTER", 0.05)
+
+    async def slow_pending(ws, a):
+        await asyncio.sleep(0.2)  # long enough to count as accepted
+        await ws.close(code=client.CLOSE_PENDING)
+
+    outcome, agent = asyncio.run(against(slow_pending))
+    assert outcome == "pending" and agent.pending_approval is True
+    assert agent.last_connected is None and not agent.connected
 
 
 def test_run_waits_the_pending_delay(monkeypatch):
@@ -152,16 +191,15 @@ def test_run_waits_the_pending_delay(monkeypatch):
         agent = Client("ws://x", uuid.uuid4(), Ed25519PrivateKey.generate(), "t")
         delays = []
 
-        async def pending(session, ha=None):
-            agent._pending_attempt = True
-            return False
+        async def attempt(session, ha=None):
+            return "pending"
 
         async def wait(delay):
             delays.append(delay)
             if len(delays) == 3:
                 raise asyncio.CancelledError
 
-        monkeypatch.setattr(agent, "_connect_once", pending)
+        monkeypatch.setattr(agent, "_connect_once", attempt)
         monkeypatch.setattr(agent, "wait", wait)
         try:
             await agent.run()

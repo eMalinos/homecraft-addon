@@ -158,9 +158,11 @@ o spárování poznat): veřejný klíč, název Home Assistantu (`location_name
 nejvýš 64 znaků) a dva otisky, vždy jen prvních 16 hex znaků SHA-256, nikdy
 hodnota sama: `machine_fp` z ID hostitele HA OS (`machine_id` ze Supervisoru
 `/info`) a `ha_fp` z ID instalace Home Assistantu (`.storage/core.uuid`). ID
-instalace není v žádném API, proto doplněk při startu přečte sám tenhle jediný
-soubor z `.storage/` (AppArmor povoluje právě jeho). Hodnoty ani otisky nejdou
-do logu ani do panelu. Co nejde zjistit, doplněk vynechá.
+instalace není v žádném API, proto ho při startu přečte spouštěcí skript
+`run.sh` (mimo profil agenta, AppArmor mu povoluje právě tenhle soubor)
+a předá agentovi v proměnné prostředí. Agent sám `.storage/` nečte. Hodnoty
+ani otisky nejdou do logu ani do panelu. Co nejde zjistit (HA nebo Supervisor
+ještě neběží), doplněk vynechá a zkusí znovu při dalším připojení.
 
 **AppArmor** (druhá vrstva pod allowlistem): vlastní profil `apparmor.txt`
 omezuje agenta i v případě chyby v allowlistu nebo v kódu doplňku. Agent běží
@@ -168,14 +170,15 @@ ve vlastním podprofilu a jádro HA OS mu dovolí jen:
 
 - Python a jeho knihovny, kód doplňku (`/app`) jen ke čtení;
 - `/data` (identita, token, stav, audit, `options.json`);
-- `configuration.yaml` a `.storage/core.uuid` ke čtení a `packages/`, `custom_templates/`, `themes/`
+- `configuration.yaml` ke čtení a `packages/`, `custom_templates/`, `themes/`
   ke čtení i zápisu;
 - síť (Homecraft, Supervisor, Home Assistant) a certifikáty a DNS v `/etc`.
 
 Odepřeno je vše ostatní, hlavně spuštění shellu nebo jiného programu, zápis do
 `custom_components/` a jinam do `/homeassistant`, čtení i zápis `secrets.yaml`
-a zbytku `.storage/`. Spouštěcí skripty S6 mají pravidla podle příkladu
-v dokumentaci Home Assistantu. Do vyladění na živém HA OS je profil v režimu
+a `.storage/` (odepření platí i v režimu `complain`). Spouštěcí skripty S6
+mají pravidla podle příkladu v dokumentaci Home Assistantu; `run.sh` navíc
+smí číst `.storage/core.uuid`. Do vyladění na živém HA OS je profil v režimu
 `complain` (porušení jen zapisuje do logu).
 
 *Pro vývoj:* každá nová funkce, která sahá na nové cesty nebo spouští nový
@@ -206,6 +209,7 @@ dosah na Home Assistant. Nic nemění.
 - Úplně: zruš spárování v Homecraftu, nebo doplněk odinstaluj (smaže se
   i jeho identita, token a audit v `/data`).
 
-Dokud žádost čeká na schválení, zkouší to doplněk po 10 s a pak každých 30 s.
-Bez spárování (Homecraft spojení odmítne) se doplněk připojuje čím dál řidčeji (1, 5, 15, 60 minut, dál
-jednou za hodinu), dokud ho znovu nespáruješ nebo neodinstaluješ.
+Dokud žádost čeká na schválení, zkouší to doplněk po 10 s a pak každých 30 s,
+po 15 minutách už jen čím dál řidčeji jako bez spárování. Bez spárování
+(Homecraft spojení odmítne) se doplněk připojuje čím dál řidčeji (1, 5, 15,
+60 minut, dál jednou za hodinu), dokud ho znovu nespáruješ nebo neodinstaluješ.

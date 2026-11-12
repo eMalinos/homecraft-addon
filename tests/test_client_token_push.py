@@ -82,7 +82,7 @@ def test_push_reconnects_with_the_new_token_and_commits_it(caplog, data_dir):
     assert out["reply"] == {"id": 1, "ok": True, "result": None}
     assert out["then"].type == aiohttp.WSMsgType.CLOSE
     assert [h["access_token_fp"] for h in hellos] == [OLD_FP, NEW_FP]
-    assert results == [False, False]
+    assert results == ["outage", "outage"]
     assert access_token.load() == (("new.access", SECRET), False)
     assert access_token.updated_by_homecraft() is not None
     audit.flush()
@@ -109,7 +109,7 @@ def test_refused_staged_token_falls_back_in_the_same_attempt_and_commits_later(c
     agent, hellos, seen, results = asyncio.run(serve([first, on_old], refuse=refuse))
     assert seen == ["old.access", "new.access", "old.access"]  # 403, then old at once
     assert [h["access_token_fp"] for h in hellos] == [OLD_FP, OLD_FP]
-    assert results == [False, False]
+    assert results == ["outage", "outage"]
     assert out["again"]["ok"] is True and out["stayed"] is True  # no reconnect loop
     assert access_token.load() == (("new.access", SECRET), True)  # still staged
     assert access_token.active() == ("old.access", "s1")

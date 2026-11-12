@@ -28,7 +28,13 @@ profile homecraft_connector flags=(attach_disconnected,mediate_deleted,complain)
   # Access to options.json and other files within the add-on
   /data/** rw,
 
-  # The agent (Dockerfile CMD; python3 -> python3.12) runs in its own profile.
+  # run.sh (Dockerfile CMD) reads HA's install uuid for the pairing request's
+  # fingerprint and passes it to the agent in HA_INSTALL_UUID; the agent itself
+  # never reads .storage (denied in its profile below).
+  /run.sh rix,
+  /homeassistant/.storage/core.uuid r,
+
+  # The agent (run.sh execs python3 -> python3.12) runs in its own profile.
   /usr/local/bin/python3.12 cx -> connector,
 
   profile connector flags=(attach_disconnected,mediate_deleted,complain) {
@@ -70,15 +76,9 @@ profile homecraft_connector flags=(attach_disconnected,mediate_deleted,complain)
     /homeassistant/configuration.yaml r,
     /homeassistant/{packages,custom_templates,themes}/{,**} rw,
 
-    # HA's uuid, read once at start for the pairing request's fingerprint
-    # (connector/fingerprint.py; only its sha256 leaves the add-on).
-    /homeassistant/.storage/core.uuid r,
-
     # Explicit denies win over any allow rule, in complain mode too.
     deny /homeassistant/**secrets.yaml rw,
-    # Write only: a read deny would also beat the core.uuid rule above. Reading
-    # the rest of .storage stays refused, nothing in this profile allows it.
-    deny /homeassistant/.storage/{,**} w,
+    deny /homeassistant/.storage/{,**} rw,
     deny /homeassistant/custom_components/{,**} w,
     # No shell and no other program: nothing in this profile may exec.
     deny /** x,
