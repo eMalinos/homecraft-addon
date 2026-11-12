@@ -22,6 +22,15 @@ Soukromý klíč zůstává v doplňku (`/data`).
 Přístupový token Cloudflare se do možností **nezadává** (byl by v nich čitelný).
 Zadává se v panelu doplňku.
 
+## Co smí Homecraft dělat
+
+Doplněk provede jen operace z pevného seznamu v jeho kódu (ne z možností ani ze
+serveru): příkazy WebSocketu, které features potřebují (registry, pomocníci,
+dashboardy, `reload` služby, `scheduler.edit`, doplňky Node-RED, go2rtc,
+InfluxDB a Grafana), několik REST adres (kontrola konfigurace, integrace
+InfluxDB) a soubory jen v `packages/`, `custom_templates/` a `themes/`
+(`configuration.yaml` jen ke čtení). Cokoli jiného odmítne s chybou `not_allowed`.
+
 ## Log při startu (self-check)
 
 Doplněk při startu ověří, k čemu má přístup, a do logu zapíše `OK` / `FAIL` /

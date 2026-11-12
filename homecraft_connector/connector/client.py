@@ -1,6 +1,4 @@
-"""The outgoing connection to Homecraft: challenge/hello, request loop, reconnect.
-
-Operations come with #555; until then every request is refused."""
+"""The outgoing connection to Homecraft: challenge/hello, request loop, reconnect."""
 
 import asyncio
 import json
@@ -8,17 +6,21 @@ import logging
 import random
 import time
 import uuid
+from dataclasses import dataclass, field
 
 import aiohttp
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from . import access_token, identity
+from . import access_token, files, http_proxy, identity, policy, ws_proxy
 
 logger = logging.getLogger(__name__)
 
 CLOSE_UNAUTHORIZED = 4401
 STABLE_AFTER = 60.0  # seconds connected before the backoff starts over
 MAX_MSG_SIZE = 16 * 1024 * 1024
+# What we send: the backend (uvicorn) closes the connection over 16 MiB.
+MAX_FRAME = 15 * 1024 * 1024
+MAX_CONCURRENT_OPS = 4  # http and file.* at once; ws.* are not limited
 
 # Not paired (4401) or no valid Access token (403): retrying every minute
 # forever would only knock on a closed door, so slow down to once an hour.
@@ -102,7 +104,7 @@ class Client:
             ) as ws:
                 started = time.monotonic()
                 logger.info("Připojeno k %s", self.server_url)
-                await self._serve(ws)
+                await self._serve(ws, session)
                 code = ws.close_code
         except aiohttp.WSServerHandshakeError as e:
             if access_refused(e):
@@ -122,33 +124,141 @@ class Client:
         logger.info("Spojení s Homecraftem skončilo (kód %s)", code)
         return False
 
-    async def _serve(self, ws: aiohttp.ClientWebSocketResponse) -> None:
-        async for msg in ws:
-            if msg.type != aiohttp.WSMsgType.TEXT:
-                continue
-            try:
-                data = json.loads(msg.data)
-            except ValueError:
-                continue
-            if not isinstance(data, dict):
-                continue
-            if data.get("op") == "challenge":
-                try:
-                    sig = identity.sign_hello(self.agent_id, self.key, data["nonce"])
-                except (KeyError, TypeError, ValueError):
-                    logger.warning("Neplatná výzva od serveru")
-                    return
-                await ws.send_json(
-                    {
-                        "op": "hello",
-                        "agent_id": str(self.agent_id),
-                        "version": self.version,
-                        "sig": sig,
-                    }
-                )
-            elif "id" in data:
-                await ws.send_json(self._reply(data))
+    async def _serve(
+        self, ws: aiohttp.ClientWebSocketResponse, http: aiohttp.ClientSession
+    ) -> None:
+        lock = asyncio.Lock()
 
-    def _reply(self, request: dict) -> dict:
-        code = "paused" if self.paused else "not_implemented"
-        return {"id": request["id"], "ok": False, "error": {"code": code, "message": ""}}
+        async def send(data: dict) -> None:
+            text = json.dumps(data)  # ASCII: len == bytes
+            if len(text) > MAX_FRAME:
+                smaller = _oversized(data)
+                if smaller is None:
+                    logger.warning("Zpráva přes limit rámce zahozena")
+                    return
+                text = json.dumps(smaller)
+            async with lock:
+                await ws.send_str(text)
+
+        conn = _Conn(ws_proxy.Sessions(http, send), http_proxy.HttpProxy(http))
+        sessions = conn.sessions
+        tasks: set[asyncio.Task] = set()
+
+        async def respond(request: dict) -> None:
+            reply = await self._reply(request, conn)
+            await send(reply)
+            msg = request.get("msg")
+            if request.get("op") == "ws.send" and not reply["ok"] and isinstance(msg, dict):
+                if "id" in msg:  # AgentSocket.recv waits for this id, not for our reply
+                    await send(
+                        {
+                            "op": "ws.msg",
+                            "session": request.get("session"),
+                            "msg": ws_proxy.ha_error(msg["id"], **reply["error"]),
+                        }
+                    )
+
+        try:
+            async for msg in ws:
+                if msg.type != aiohttp.WSMsgType.TEXT:
+                    continue
+                try:
+                    data = json.loads(msg.data)
+                except ValueError:
+                    continue
+                if not isinstance(data, dict):
+                    continue
+                if data.get("op") == "challenge":
+                    try:
+                        sig = identity.sign_hello(self.agent_id, self.key, data["nonce"])
+                    except (KeyError, TypeError, ValueError):
+                        logger.warning("Neplatná výzva od serveru")
+                        return
+                    await send(
+                        {
+                            "op": "hello",
+                            "agent_id": str(self.agent_id),
+                            "version": self.version,
+                            "sig": sig,
+                        }
+                    )
+                elif "id" in data:
+                    if data.get("op") in ("ws.send", "ws.close"):
+                        await respond(data)  # inline: a session keeps its message order
+                    else:
+                        task = asyncio.create_task(respond(data))
+                        tasks.add(task)
+                        task.add_done_callback(tasks.discard)
+        finally:
+            for task in list(tasks):
+                task.cancel()
+            await sessions.close_all()
+
+    async def _reply(self, request: dict, conn: "_Conn") -> dict:
+        rid, op = request["id"], request.get("op")
+        if self.paused:
+            return _error(rid, "paused", "")
+        try:
+            result = await _dispatch(op, request, conn)
+        except policy.OpError as e:
+            if e.code == "not_allowed":
+                logger.info("Odmítnuto: %s", e.message)
+            return _error(rid, e.code, e.message)
+        except (KeyError, TypeError, ValueError, AttributeError) as e:
+            return _error(rid, "bad_request", f"{op}: {type(e).__name__}")
+        except Exception as e:
+            # The type only: messages can carry paths, payloads or HA's answers.
+            logger.warning("Operace %s selhala: %s", op, type(e).__name__)
+            return _error(rid, "internal", type(e).__name__)
+        return {"id": rid, "ok": True, "result": result}
+
+
+@dataclass
+class _Conn:
+    """Per Homecraft connection: HA sessions, HTTP state, and a cap on the
+    http/file operations running at once."""
+
+    sessions: ws_proxy.Sessions
+    http: http_proxy.HttpProxy
+    ops: asyncio.Semaphore = field(default_factory=lambda: asyncio.Semaphore(MAX_CONCURRENT_OPS))
+
+
+FILE_OPS = {
+    "file.read": lambda r: (files.read, r["path"]),
+    "file.write": lambda r: (files.write, r["path"], r["text"]),
+    "file.delete": lambda r: (files.delete, r["path"]),
+    "file.list": lambda r: (files.list_dir, r["path"]),
+}
+
+
+async def _dispatch(op: object, req: dict, conn: _Conn) -> object:
+    if op == "ws.open":
+        return await conn.sessions.open()
+    if op == "ws.send":
+        return await conn.sessions.send(req["session"], req["msg"])
+    if op == "ws.close":
+        return await conn.sessions.close(req["session"])
+    if op == "http":
+        async with conn.ops:
+            return await conn.http.handle(req)
+    if op in FILE_OPS:
+        call = FILE_OPS[op](req)
+        async with conn.ops:
+            return await asyncio.to_thread(*call)
+    raise policy.OpError("unknown_op", str(op)[:64])
+
+
+def _error(rid: object, code: str, message: str) -> dict:
+    return {"id": rid, "ok": False, "error": {"code": code, "message": message}}
+
+
+def _oversized(data: dict) -> dict | None:
+    """What goes out instead of a frame over MAX_FRAME: a reply becomes a
+    `too_large` error, a ws.msg result an HA-shaped one; anything else is dropped."""
+    message = "over the 16 MiB frame limit"
+    if "ok" in data and "id" in data:
+        return _error(data["id"], "too_large", message)
+    msg = data.get("msg")
+    if data.get("op") == "ws.msg" and isinstance(msg, dict) and "id" in msg:
+        return {**data, "msg": ws_proxy.ha_error(msg["id"], "too_large", message)}
+    return None
