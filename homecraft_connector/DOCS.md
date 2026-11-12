@@ -158,11 +158,12 @@ o spárování poznat): veřejný klíč, název Home Assistantu (`location_name
 nejvýš 64 znaků) a dva otisky, vždy jen prvních 16 hex znaků SHA-256, nikdy
 hodnota sama: `machine_fp` z ID hostitele HA OS (`machine_id` ze Supervisoru
 `/info`) a `ha_fp` z ID instalace Home Assistantu (`.storage/core.uuid`). ID
-instalace není v žádném API, proto ho při startu přečte spouštěcí skript
-`run.sh` (mimo profil agenta, AppArmor mu povoluje právě tenhle soubor)
-a předá agentovi v proměnné prostředí. Agent sám `.storage/` nečte. Hodnoty
-ani otisky nejdou do logu ani do panelu. Co nejde zjistit (HA nebo Supervisor
-ještě neběží), doplněk vynechá a zkusí znovu při dalším připojení.
+instalace není v žádném API, proto ho jednou při startu přečte spouštěcí
+skript `run.sh` (mimo podprofil agenta) a předá agentovi v proměnné
+prostředí; agent sám `.storage/` nečte. Hodnoty ani otisky nejdou do logu ani
+do panelu. Co nejde zjistit, doplněk vynechá. Název HA a `machine_fp` (HA nebo
+Supervisor ještě neběží) zkusí znovu při dalším připojení, dokud doplněk
+není spárovaný; `ha_fp` se znovu nečte, načte ho až restart doplňku.
 
 **AppArmor** (druhá vrstva pod allowlistem): vlastní profil `apparmor.txt`
 omezuje agenta i v případě chyby v allowlistu nebo v kódu doplňku. Agent běží
@@ -176,9 +177,10 @@ ve vlastním podprofilu a jádro HA OS mu dovolí jen:
 
 Odepřeno je vše ostatní, hlavně spuštění shellu nebo jiného programu, zápis do
 `custom_components/` a jinam do `/homeassistant`, čtení i zápis `secrets.yaml`
-a `.storage/` (odepření platí i v režimu `complain`). Spouštěcí skripty S6
-mají pravidla podle příkladu v dokumentaci Home Assistantu; `run.sh` navíc
-smí číst `.storage/core.uuid`. Do vyladění na živém HA OS je profil v režimu
+a `.storage/` (explicitní odepření platí i v režimu `complain`). To platí pro
+proces agenta (podprofil `connector`). Nadřazený profil pro spouštěcí skripty
+S6 a `run.sh` je podle příkladu v dokumentaci Home Assistantu zatím široký
+(`file,`), zúžení řeší #561; `run.sh` z `.storage/` čte jen `core.uuid`. Do vyladění na živém HA OS je profil v režimu
 `complain` (porušení jen zapisuje do logu).
 
 *Pro vývoj:* každá nová funkce, která sahá na nové cesty nebo spouští nový
@@ -210,6 +212,7 @@ dosah na Home Assistant. Nic nemění.
   i jeho identita, token a audit v `/data`).
 
 Dokud žádost čeká na schválení, zkouší to doplněk po 10 s a pak každých 30 s,
-po 15 minutách už jen čím dál řidčeji jako bez spárování. Bez spárování
+po 15 minutách každou minutu (žádost v Homecraftu tak nevyprší a schválení
+se projeví do minuty). Bez spárování
 (Homecraft spojení odmítne) se doplněk připojuje čím dál řidčeji (1, 5, 15,
 60 minut, dál jednou za hodinu), dokud ho znovu nespáruješ nebo neodinstaluješ.

@@ -20,19 +20,32 @@ def test_refusal_slows_to_hourly():
     assert minutes == [1, 5, 15, 60, 60, 60]
 
 
-def test_pending_retries_soon_then_falls_back_to_refused(monkeypatch):
+def test_pending_retries_soon_then_every_minute(monkeypatch):
     now = [1000.0]
     monkeypatch.setattr(client_module.time, "monotonic", lambda: now[0])
     b = Backoff()
     assert [b.next("pending") for _ in range(3)] == [10, 30, 30]
     now[0] += client_module.PENDING_LIFETIME
-    assert [b.next("pending") / 60 for _ in range(2)] == [1, 5]  # REFUSED_DELAYS
+    assert [b.next("pending") for _ in range(3)] == [60, 60, 60]
 
 
-def test_entering_pending_starts_at_ten_seconds():
+def test_pending_phase_survives_outages_and_reset(monkeypatch):
+    now = [1000.0]
+    monkeypatch.setattr(client_module.time, "monotonic", lambda: now[0])
+    b = Backoff()
+    b.next("pending")
+    assert b.next("outage") == 1
+    b.reset()
+    assert b.next("pending") == 30  # the cadence goes on
+    now[0] += client_module.PENDING_LIFETIME
+    b.next("outage")
+    assert b.next("pending") == 60  # and so does the clock
+
+
+def test_end_pending_starts_at_ten_seconds_again():
     b = Backoff()
     b.next("pending"), b.next("pending")
-    assert b.next("outage") == 1
+    b.end_pending()
     assert [b.next("pending") for _ in range(2)] == [10, 30]
 
 

@@ -30,7 +30,9 @@ profile homecraft_connector flags=(attach_disconnected,mediate_deleted,complain)
 
   # run.sh (Dockerfile CMD) reads HA's install uuid for the pairing request's
   # fingerprint and passes it to the agent in HA_INSTALL_UUID; the agent itself
-  # never reads .storage (denied in its profile below).
+  # never reads .storage (denied in its profile below). `file,` above already
+  # covers this read: the line documents intent until this profile is
+  # narrowed (#561).
   /run.sh rix,
   /homeassistant/.storage/core.uuid r,
 

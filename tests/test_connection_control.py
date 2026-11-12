@@ -1,6 +1,7 @@
 """Pause, reconnect and the connection state against a scripted fake Homecraft."""
 
 import asyncio
+import logging
 import uuid
 
 import aiohttp
@@ -128,6 +129,48 @@ def test_hello_carries_the_public_key_and_extra():
     assert calls == [1, 1]  # asked before every attempt (it caches by itself)
 
 
+def test_lookups_stop_once_paired_and_resume_when_unpaired(monkeypatch):
+    monkeypatch.setattr(client, "HELLO_ACCEPTED_AFTER", 0.05)
+    calls = []
+
+    async def extra():
+        calls.append(1)
+        return {}
+
+    agent = Client("ws://x", uuid.uuid4(), Ed25519PrivateKey.generate(), "t", hello_extra=extra)
+
+    async def accepted(ws, a):
+        await asyncio.sleep(0.2)
+
+    async def unpaired(ws, a):
+        await ws.close(code=client.CLOSE_UNAUTHORIZED)
+
+    asyncio.run(against(accepted, agent))
+    asyncio.run(against(accepted, agent))
+    assert calls == [1]  # paired: no more lookups
+    asyncio.run(against(unpaired, agent))  # still thought paired: no lookup
+    asyncio.run(against(unpaired, agent))
+    assert calls == [1, 1]
+
+
+def test_reconnect_during_lookups_does_not_drop_the_new_connection(monkeypatch):
+    monkeypatch.setattr(client, "HELLO_ACCEPTED_AFTER", 0.05)
+    seen = {}
+
+    async def extra():
+        agent.reconnect_now()  # e.g. the panel saved a token meanwhile
+        return {}
+
+    agent = Client("ws://x", uuid.uuid4(), Ed25519PrivateKey.generate(), "t", hello_extra=extra)
+
+    async def quiet(ws, a):
+        await asyncio.sleep(0.2)
+        seen["connected"] = a.connected
+
+    asyncio.run(against(quiet, agent))
+    assert seen == {"connected": True}
+
+
 async def pending(ws, a):
     await ws.close(code=client.CLOSE_PENDING)
 
@@ -184,6 +227,31 @@ def test_slow_pending_close_is_not_a_connection(monkeypatch):
     outcome, agent = asyncio.run(against(slow_pending))
     assert outcome == "pending" and agent.pending_approval is True
     assert agent.last_connected is None and not agent.connected
+
+
+def test_slow_unpaired_close_is_not_a_connection(monkeypatch):
+    monkeypatch.setattr(client, "HELLO_ACCEPTED_AFTER", 0.05)
+
+    async def slow_unpaired(ws, a):
+        await asyncio.sleep(0.2)
+        await ws.close(code=client.CLOSE_UNAUTHORIZED)
+
+    outcome, agent = asyncio.run(against(slow_unpaired))
+    assert outcome == "refused" and agent.last_connected is None and not agent.connected
+    assert agent.last_error.startswith("Agent není spárovaný")
+
+
+def test_pending_logged_once_even_after_slow_closes(monkeypatch, caplog):
+    caplog.set_level(logging.INFO)
+    monkeypatch.setattr(client, "HELLO_ACCEPTED_AFTER", 0.05)
+
+    async def slow_pending(ws, a):
+        await asyncio.sleep(0.2)
+        await ws.close(code=client.CLOSE_PENDING)
+
+    _, agent = asyncio.run(against(slow_pending))
+    asyncio.run(against(slow_pending, agent))
+    assert caplog.text.count("Čeká na schválení") == 1
 
 
 def test_run_waits_the_pending_delay(monkeypatch):

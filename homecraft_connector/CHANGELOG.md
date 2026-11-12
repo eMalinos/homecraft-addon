@@ -9,12 +9,14 @@
 - Úvodní zpráva navíc nese veřejný klíč, název Home Assistantu a otisky
   hostitele a instalace HA (jen 16 znaků SHA-256, nikdy hodnota sama).
 - Na „čeká na schválení“ (kód 4403) panel ukáže odznak a doplněk to zkouší
-  znovu po 10 s a pak každých 30 s (po 15 minutách řidčeji).
-- Nový spouštěcí skript `run.sh` přečte ID instalace HA (`.storage/core.uuid`)
-  a předá ho agentovi. AppArmor povoluje to čtení jen jemu; agent sám
-  `.storage/` dál nečte (odepřeno i v režimu `complain`).
-- Panel se ukáže hned po startu; název HA a otisky doplněk dohledá při
-  připojení a co chybí, zkusí znovu při dalším pokusu.
+  znovu po 10 s, pak každých 30 s a po 15 minutách každou minutu.
+- Nový spouštěcí skript `run.sh` jednou při startu přečte ID instalace HA
+  (`.storage/core.uuid`) a předá ho agentovi; bez souboru ho načte až restart.
+  Agent sám `.storage/` dál nečte (podprofil `connector` ho odepírá i v režimu
+  `complain`).
+- Panel se ukáže hned po startu; název HA a otisk hostitele doplněk dohledá
+  při připojení (každý nejvýš 5 s) a co chybí, zkouší znovu, dokud není
+  spárovaný.
 
 ## 0.6.1
 

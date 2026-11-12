@@ -16,6 +16,12 @@ from . import selfcheck, settings
 logger = logging.getLogger(__name__)
 
 HA_NAME_MAX = 64
+# Each lookup at most this long: they run before a connection attempt.
+LOOKUP_TIMEOUT = 5.0
+
+
+class LookupFailed(Exception):
+    """A lookup failed with a message of our own (no values in it): logged verbatim."""
 
 
 def _fp(value: str) -> str:
@@ -31,7 +37,7 @@ async def _machine_fp(http: aiohttp.ClientSession) -> str | None:
         headers={"Authorization": f"Bearer {settings.SUPERVISOR_TOKEN}"},
     ) as resp:
         if resp.status != 200:
-            raise LookupError(f"Supervisor /info: HTTP {resp.status}")
+            raise LookupFailed(f"Supervisor /info: HTTP {resp.status}")
         value = (await resp.json()).get("data", {}).get("machine_id")
     return _fp(value) if isinstance(value, str) and value else None
 
@@ -46,7 +52,7 @@ async def _ha_name(http: aiohttp.ClientSession) -> str | None:
 
 def _detail(e: BaseException) -> str:
     """Our own messages (HTTP status, HA's auth reply); else the type only."""
-    if isinstance(e, (LookupError, selfcheck.CoreAuthError)):
+    if isinstance(e, (LookupFailed, selfcheck.CoreAuthError)):
         return str(e)
     return type(e).__name__
 
@@ -55,12 +61,14 @@ LOOKUPS = {"ha_name": _ha_name, "machine_fp": _machine_fp}
 
 
 class Collector:
-    """Called before every connection attempt: looks up only what is still
-    missing (core or the Supervisor may not be ready at start), keeps what it found."""
+    """Called before every connection attempt of an unpaired agent: looks up only
+    what is still missing (core or the Supervisor may not be ready at start),
+    keeps what it found."""
 
     def __init__(self) -> None:
-        # HA's install uuid (.storage/core.uuid) is read by the start script,
-        # outside the agent's AppArmor profile (run.sh): the agent never reads .storage.
+        # HA's install uuid (.storage/core.uuid) is read once by run.sh at start,
+        # outside the agent's AppArmor subprofile: the agent never reads .storage.
+        # No retry for it; a restart picks it up.
         self.found = {"ha_fp": _fp(settings.HA_INSTALL_UUID)} if settings.HA_INSTALL_UUID else {}
         self._warned: set[str] = set()  # one warning per value, not one per attempt
 
@@ -69,7 +77,8 @@ class Collector:
         if missing:
             async with aiohttp.ClientSession(timeout=selfcheck.TIMEOUT) as http:
                 results = await asyncio.gather(
-                    *(LOOKUPS[key](http) for key in missing), return_exceptions=True
+                    *(asyncio.wait_for(LOOKUPS[key](http), LOOKUP_TIMEOUT) for key in missing),
+                    return_exceptions=True,
                 )
             for key, value in zip(missing, results, strict=True):
                 if isinstance(value, BaseException):
