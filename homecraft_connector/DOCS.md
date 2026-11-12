@@ -24,6 +24,9 @@ Relaci ingressu vytvoří Home Assistant jen správci, proto doplněk potřebuje
 Jde jen zadat a smazat, nikdy zobrazit, a doplněk ho používá jen na vytvoření
 relace ingressu (`/ingress/session`); Homecraftu ho nikdy nepošle. Bez něj
 funguje vše ostatní, jen požadavky do doplňků skončí chybou `no_ha_token`.
+Doplněk se kvůli tomu připojuje na `ws://homeassistant:8123`. Má-li Home
+Assistant certifikát přímo v `http:` (`ssl_certificate`), ingress přes Connector
+zatím nefunguje.
 
 ## Možnosti
 
