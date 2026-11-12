@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.5.0
+
+MINE_PLACEHOLDER
 ## 0.4.0
 
 - Kontrola obsahu: doplněk odmítne zápis, který by v Home Assistantu spouštěl

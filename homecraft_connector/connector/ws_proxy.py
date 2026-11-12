@@ -45,6 +45,10 @@ class Sessions:
         self._open: dict[str, tuple[aiohttp.ClientWebSocketResponse, asyncio.Task]] = {}
         self._opening = 0
 
+    @property
+    def idle(self) -> bool:
+        return not self._open and not self._opening
+
     async def open(self) -> dict:
         if len(self._open) + self._opening >= MAX_SESSIONS:
             raise policy.OpError("too_many_sessions", f"at most {MAX_SESSIONS}")

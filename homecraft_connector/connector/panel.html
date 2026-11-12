@@ -95,6 +95,7 @@ td.ok { color: var(--ok); } td.bad { color: var(--bad); } td.warn { color: var(-
     <h2>Přístupový token Homecraftu</h2>
     <div id="tokenSet" hidden>
       <div class="row"><span class="badge on">Token nastaven ✓</span>
+        <span id="tokenUpdated" class="muted" hidden></span>
         <button id="tokenChange">Změnit</button>
         <button id="tokenDelete" class="danger">Smazat</button></div>
     </div>
@@ -163,6 +164,8 @@ async function refreshStatus() {
   $("tokenSet").hidden = !s.token_set || editingToken;
   $("tokenForm").hidden = s.token_set && !editingToken;
   $("tokenCancel").hidden = !s.token_set;
+  $("tokenUpdated").hidden = !s.token_updated_at;
+  $("tokenUpdated").textContent = "(aktualizován " + fmtTime(s.token_updated_at) + " Homecraftem)";
 }
 
 const RESULT = { paused: ["Pozastaveno", "warn"], not_allowed: ["Nepovoleno", "bad"] };

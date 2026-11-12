@@ -80,6 +80,7 @@ async def _status(request: web.Request) -> web.Response:
             "last_connected": client.last_connected,
             "pairing_code": request.app[PAIRING_CODE],
             "token_set": access_token.load() is not None,
+            "token_updated_at": access_token.updated_by_homecraft(),
             "paused": client.paused,
         }
     )

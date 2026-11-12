@@ -41,6 +41,15 @@ Panel je dostupný jen přes Home Assistant (ingress), nikde jinde neposlouchá.
   panel ukazuje jen „Token nastaven ✓“; token není vidět v panelu, v nastavení
   doplňku ani v jeho YAML a nepíše se do logu. Uložení i smazání tokenu
   ukončí současné spojení s Homecraftem (nové použije nový token).
+
+  Při výměně tokenu (rotace) pošle Homecraft doplňku nový token sám, po už
+  ověřeném spojení (operace `access_token.set`, i během pauzy: týká se jen
+  spojení s Homecraftem, ne Home Assistantu). Doplněk ho nejdřív jen odloží,
+  dokončí rozběhnuté požadavky a otevřená sezení a teprve pak se připojí
+  znovu s novým tokenem. Když ho Cloudflare pustí, nový token platí
+  (panel: „aktualizován <datum> Homecraftem“, audit `access_token.commit`).
+  Když ho odmítne, doplněk ho zahodí a připojí se dál s původním. Homecraft
+  nemůže nastavit nic jiného než token (adresu serveru ani možnosti ne).
 - **Audit**: posledních 200 operací (čas, operace, cíl, výsledek, trvání).
   Cíl je typ příkazu WebSocketu, metoda a cesta HTTP nebo cesta souboru,
   nikdy obsah souborů, těla požadavků ani tokeny. Soubor `/data/audit.jsonl`

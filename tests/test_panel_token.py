@@ -45,3 +45,16 @@ def test_change_replaces_the_token(run_panel):
 
     run_panel(scenario)
     assert access_token.load() == ("b", "new")
+
+
+def test_status_says_when_homecraft_updated_the_token(run_panel):
+    async def status(http):
+        return await (await http.get("/api/status")).json()
+
+    access_token.save(TOKEN)
+    assert run_panel(status)["token_updated_at"] is None
+    access_token.stage(TOKEN)
+    access_token.commit()
+    body = run_panel(status)
+    assert body["token_set"] is True and isinstance(body["token_updated_at"], float)
+    assert SECRET not in str(body)

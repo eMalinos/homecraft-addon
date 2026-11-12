@@ -78,6 +78,11 @@ class Client:
         self._conn: _Conn | None = None
         self._dropping = False
         self._closers: set[asyncio.Task] = set()
+        # access_token.set (#565): reconnect with the staged token once idle;
+        # a token Access refused is not staged again (it would loop).
+        self._rotate = False
+        self._rejected: dict | None = None
+        self._token_id: str | None = None  # client_id of this connection's token
 
     def reconnect_now(self) -> None:
         """Connect again at once (panel: **Připojit znovu**, token saved or deleted):
@@ -125,6 +130,7 @@ class Client:
 
     async def _connect_once(self, session: aiohttp.ClientSession) -> bool:
         """One connection until it drops. True when Homecraft refused us."""
+        staged = access_token.pending()
         token = access_token.load()
         headers = (
             {"CF-Access-Client-Id": token[0], "CF-Access-Client-Secret": token[1]} if token else {}
@@ -137,11 +143,16 @@ class Client:
             ) as ws:
                 started = time.monotonic()
                 self._ws = ws
+                self._token_id = token[0] if token else None
+                if staged:
+                    self._commit_token()
                 logger.info("Připojeno k %s", self.server_url)
                 await self._serve(ws, session)
                 code = ws.close_code
         except aiohttp.WSServerHandshakeError as e:
             if access_refused(e):
+                if staged:
+                    return self._reject_token(token)
                 return self._failed(
                     True, "Chybí nebo neplatí přístupový token — zadej ho v panelu add-onu"
                 )
@@ -155,11 +166,43 @@ class Client:
         if code == CLOSE_UNAUTHORIZED:
             return self._failed(True, "Agent není spárovaný — vlož párovací kód v Homecraftu")
         if self._dropping:
-            logger.info("Spojení s Homecraftem ukončeno z panelu")
+            logger.info("Spojení s Homecraftem ukončeno, připojuji se znovu")
             return False
         logger.info("Spojení s Homecraftem skončilo (kód %s)", code)
         self.last_error = f"Spojení skončilo (kód {code})"
         return False
+
+    @staticmethod
+    def _commit_token() -> None:
+        try:
+            access_token.commit()
+        except FileNotFoundError:
+            return  # replaced in the panel meanwhile
+        logger.info("Přístupový token aktualizován Homecraftem")
+        audit.record("access_token.commit", "", True)
+
+    def _reject_token(self, token: tuple[str, str]) -> bool:
+        self._rejected = {"client_id": token[0], "client_secret": token[1]}
+        access_token.discard()
+        audit.record("access_token.commit", "", False, "refused")
+        # Not a refusal of us: the active token is tried again in a second.
+        return self._failed(False, "Nový token odmítnut Cloudflare, ponechán původní")
+
+    def _set_token(self, rid: object, request: dict) -> dict:
+        """`access_token.set` from Homecraft: staged, never echoed or logged."""
+        token = request.get("token")
+        try:
+            if not isinstance(token, str):
+                raise ValueError
+            if access_token.parse(token) == self._rejected:
+                return _error(rid, "refused", "Access refused this token before")
+            access_token.stage(token)
+        except ValueError:
+            return _error(rid, "bad_request", "expected <client_id>:<client_secret>")
+        except OSError as e:
+            return _error(rid, "internal", type(e).__name__)
+        self._rotate = True
+        return {"id": rid, "ok": True, "result": None}
 
     def _failed(self, refused: bool, message: str) -> bool:
         logger.warning("%s", message)
@@ -187,6 +230,14 @@ class Client:
         sessions = conn.sessions
         accept = asyncio.get_running_loop().call_later(HELLO_ACCEPTED_AFTER, self._accepted)
         tasks: set[asyncio.Task] = set()
+        self._rotate = False
+
+        def maybe_rotate(_: object = None) -> None:
+            # ponytail: checked when a request ends; a session HA closes by itself
+            # does not trigger it, the next request (or connection) does.
+            if self._rotate and not tasks and sessions.idle:
+                self._rotate = False
+                self.reconnect_now()
 
         async def respond(request: dict) -> None:
             reply = await self._reply(request, conn)
@@ -224,16 +275,19 @@ class Client:
                             "agent_id": str(self.agent_id),
                             "version": self.version,
                             "sig": sig,
+                            **({"access_client_id": self._token_id} if self._token_id else {}),
                         }
                     )
                 elif "id" in data:
                     self._accepted()  # requests come only after an accepted hello
-                    if data.get("op") in ("ws.send", "ws.close"):
+                    if data.get("op") in ("ws.send", "ws.close", "access_token.set"):
                         await respond(data)  # inline: a session keeps its message order
+                        maybe_rotate()
                     else:
                         task = asyncio.create_task(respond(data))
                         tasks.add(task)
                         task.add_done_callback(tasks.discard)
+                        task.add_done_callback(maybe_rotate)
         finally:
             accept.cancel()
             self._conn = None
@@ -257,6 +311,10 @@ class Client:
 
     async def _handle(self, request: dict, conn: "_Conn") -> dict:
         rid, op = request["id"], request.get("op")
+        # Before pause and the allowlist: it touches only the connection to
+        # Homecraft, never HA, and a paused home must not lose that at rotation.
+        if op == "access_token.set":
+            return self._set_token(rid, request)
         if self.paused and op != "ws.close":  # Homecraft may still close its sessions
             return _error(rid, "paused", "")
         try:
