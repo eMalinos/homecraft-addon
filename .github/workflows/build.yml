@@ -1,0 +1,45 @@
+name: Build
+
+# A tag v<version> (config.yaml `version`) builds both images and pushes them as
+# ghcr.io/emalinos/homecraft-connector-{arch}:<version>, which the Supervisor pulls.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ${{ matrix.arch }}
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      id-token: write # Cosign signing
+      packages: write # push to GHCR
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: amd64, os: ubuntu-24.04 }
+          - { arch: aarch64, os: ubuntu-24.04-arm }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Version from the tag
+        id: version
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          grep -q "^version: \"${version}\"$" homecraft_connector/config.yaml \
+            || { echo "::error::tag ${GITHUB_REF_NAME} != config.yaml version"; exit 1; }
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+      - uses: home-assistant/builder/actions/build-image@7412f0023ea9b6e58e8bb5059f1660f51376f49a # 2026.09.0
+        with:
+          arch: ${{ matrix.arch }}
+          context: homecraft_connector
+          container-registry-password: ${{ secrets.GITHUB_TOKEN }}
+          image: ghcr.io/emalinos/homecraft-connector-${{ matrix.arch }}
+          image-tags: ${{ steps.version.outputs.version }}
+          cache-image-tag: ${{ steps.version.outputs.version }}
+          push: "true"
+          skip-existing: ${{ steps.version.outputs.version }}
+          version: ${{ steps.version.outputs.version }}
