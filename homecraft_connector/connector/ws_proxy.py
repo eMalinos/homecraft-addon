@@ -11,7 +11,7 @@ from collections.abc import Awaitable, Callable
 
 import aiohttp
 
-from . import policy, settings
+from . import content, policy, settings
 
 logger = logging.getLogger(__name__)
 
@@ -98,8 +98,9 @@ class Sessions:
             self._open.pop(sid, None)
             await ws.close()
 
-    async def send(self, sid: str, msg: object) -> bool:
-        """Forward an allowed command (True); refuse any other as HA would answer it."""
+    async def send(self, sid: str, msg: object) -> str | None:
+        """Forward an allowed command (None); refuse any other as HA would
+        answer it and return the refusal's code."""
         entry = self._open.get(sid)
         if entry is None:
             raise policy.OpError("unknown_session", "")
@@ -112,9 +113,17 @@ class Sessions:
                 f"{kind} is not allowed by Homecraft Connector",
             )
             await self._push({"op": "ws.msg", "session": sid, "msg": error})
-            return False
+            return "not_allowed"
+        if msg["type"] == "lovelace/config/save" and (
+            what := await asyncio.to_thread(content.check_dashboard, msg.get("config"))
+        ):
+            e = content.refused(f"lovelace/config/save {msg.get('url_path')}", what)
+            logger.info("Odmítnuto: %s", e.message)
+            error = ha_error(msg.get("id"), e.code, e.message)
+            await self._push({"op": "ws.msg", "session": sid, "msg": error})
+            return e.code
         await entry[0].send_json(msg)
-        return True
+        return None
 
     async def close(self, sid: str) -> None:
         entry = self._open.pop(sid, None)

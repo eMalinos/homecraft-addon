@@ -2,6 +2,7 @@
 
 import json
 
+import pytest
 from test_client_ops import run_against_homecraft
 
 from connector import audit, client, settings
@@ -60,28 +61,32 @@ def test_operations_are_audited(tmp_path, monkeypatch):
             {"id": 1, "op": "file.write", "path": "packages/a.yaml", "text": "secret: SECRET"},
             {"id": 2, "op": "file.read", "path": "secrets.yaml"},
             {"id": 3, "op": "ws.send", "session": "nope", "msg": {"id": 1, "type": "get_states"}},
+            {"id": 4, "op": "file.write", "path": "packages/b.yaml", "text": "shell_command: {}"},
         ],
-        expect=4,
+        expect=5,
     )
     audit.flush()
     rows = {r["target"]: r for r in audit.recent()}
     assert rows["packages/a.yaml"]["ok"] is True and rows["packages/a.yaml"]["op"] == "file.write"
     assert rows["secrets.yaml"]["code"] == "not_allowed"
     assert rows["get_states"]["code"] == "unknown_session"
+    assert rows["packages/b.yaml"]["code"] == "refused_content"
+    assert rows["packages/b.yaml"]["ok"] is False
     assert "SECRET" not in (settings.DATA_DIR / "audit.jsonl").read_text()
 
 
-def test_refused_ws_send_is_audited_as_not_allowed():
+@pytest.mark.parametrize("code", ["not_allowed", "refused_content"])
+def test_refused_ws_send_is_audited_with_its_code(code):
     import asyncio
 
     class Conn:
         class sessions:
             @staticmethod
             async def send(sid, msg):
-                return False  # what Sessions.send says after refusing
+                return code  # what Sessions.send says after refusing
 
     agent = client.Client("ws://x", None, None, "t")
     req = {"id": 1, "op": "ws.send", "session": "s", "msg": {"id": 2, "type": "render_template"}}
     reply = asyncio.run(agent._reply(req, Conn))
     assert reply == {"id": 1, "ok": True, "result": None}
-    assert audit.recent()[0]["code"] == "not_allowed"
+    assert audit.recent()[0]["code"] == code and audit.recent()[0]["ok"] is False

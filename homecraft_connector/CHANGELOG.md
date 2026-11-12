@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.4.0
+
+- Kontrola obsahu: doplněk odmítne zápis, který by v Home Assistantu spouštěl
+  příkazy nebo posílal data ven (chyba `refused_content`, záznam v auditu a logu).
+  - Soubory v `packages/`: zakázané integrace (`shell_command`, `command_line`,
+    `rest`, `python_script`…), platformy `command_line`/`rest`/`scrape` a akce
+    `shell_command.*`, `hassio.*` a další. Žádné tagy HA (`!include`,
+    `!secret`, `!env_var`), ani v `themes/`. `secrets.yaml` zapsat nelze.
+  - Stejná kontrola akcí pro automatizace a skripty zapisované přes REST
+    a pro akce karet v dashboardech.
+  - Node-RED: nové a změněné uzly a vše, kam vedou, jen typů, které používá
+    knihovna (nikdy `exec`). Volání služeb pevně v uzlu, záložky a subflow
+    uživatele beze změny.
+  - go2rtc: Homecraft smí měnit jen klíč `webrtc`, ostatní klíče (streamy
+    s `exec:`, `echo:`, `expr:`, `api`…) zůstávají přesně uživatele.
+
 ## 0.3.0
 
 - Panel doplňku v postranním menu HA (ingress): stav spojení, párovací kód

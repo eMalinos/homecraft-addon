@@ -25,7 +25,7 @@ def test_write_read_list_delete(root):
 
 def test_missing(root):
     assert files.read("packages/nope.yaml") is None
-    assert files.list_dir("themes") == []
+    assert files.list_dir("custom_templates") == []
     assert files.read("configuration.yaml") == "default_config:\n"
 
 
@@ -64,8 +64,8 @@ def test_stale_tmp_link_is_replaced_not_followed(root, tmp_path):
 
 def test_failed_write_leaves_no_tmp(root):
     with pytest.raises(UnicodeEncodeError):
-        files.write("packages/x.yaml", "\ud800")
-    assert files.list_dir("packages") == []
+        files.write("custom_templates/x.jinja", "\ud800")
+    assert files.list_dir("custom_templates") == []
 
 
 def test_symlink_inside_root_to_other_dir(root):
@@ -77,3 +77,38 @@ def test_symlink_inside_root_to_other_dir(root):
     with pytest.raises(OpError):
         files.write("packages/conf.yaml", "x")
     assert (root / "configuration.yaml").read_text() == "default_config:\n"
+
+
+def test_package_content_is_checked_before_writing(root):
+    with pytest.raises(OpError) as e:
+        files.write("packages/x.yaml", "shell_command:\n  x: 'true'\n")
+    assert e.value.code == "refused_content"
+    assert (
+        e.value.message == "packages/x.yaml: shell_command není přes Homecraft Connector povolený"
+    )
+    assert list((root / "packages").iterdir()) == []  # no file, no .hfb-tmp
+    files.write("themes/t.yaml", "t:\n  http: x\n")  # themes run no code: not checked
+
+
+def test_package_reached_through_a_link_is_checked(root):
+    (root / "themes").mkdir()
+    (root / "themes" / "pk").symlink_to(root / "packages")
+    with pytest.raises(OpError):
+        files.write("themes/pk/x.yaml", "shell_command: {}\n")
+    assert not (root / "packages" / "x.yaml").exists()
+
+
+def test_theme_tags_and_secrets_are_refused(root):
+    for path, text in [
+        ("themes/t.yaml", "t: !secret x\n"),
+        ("themes/t.yaml", "t: !include ../secrets.yaml\n"),
+        ("themes/t.yaml", "t: !env_var X\n"),
+        ("themes/secrets.yaml", "x: y\n"),
+        ("packages/secrets.yaml", "x: y\n"),
+        ("custom_templates/secrets.yaml", "x: y\n"),
+    ]:
+        with pytest.raises(OpError) as e:
+            files.write(path, text)
+        assert e.value.code == "refused_content", path
+    assert not (root / "themes" / "t.yaml").exists()
+    files.write("custom_templates/x.jinja", "{% macro m() %}!secret{% endmacro %}\n")

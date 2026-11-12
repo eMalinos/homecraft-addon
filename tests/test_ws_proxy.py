@@ -286,3 +286,33 @@ def test_paused_sessions_push_nothing_and_close_all_notifies(monkeypatch):
             assert pushed == [{"op": "ws.closed", "session": sid}]
 
     asyncio.run(scenario())
+
+
+def test_dashboard_save_with_a_forbidden_action_is_refused(monkeypatch):
+    async def scenario():
+        async with fake_ha(monkeypatch) as (seen, _), aiohttp.ClientSession() as http:
+            pushed: list[dict] = []
+
+            async def push(data):
+                pushed.append(data)
+
+            sessions = ws_proxy.Sessions(http, push)
+            sid = (await sessions.open())["session"]
+            tap = {"action": "perform-action", "perform_action": "shell_command.x"}
+            bad = {"views": [{"cards": [{"type": "button", "tap_action": tap}]}]}
+            ok = {"views": [{"cards": [{"type": "tile", "entity": "light.a"}]}]}
+            for i, config in ((1, bad), (2, ok)):
+                msg = {"id": i, "type": "lovelace/config/save", "url_path": "d", "config": config}
+                await sessions.send(sid, msg)
+            await _until(pushed, 2)
+            replies = {p["msg"]["id"]: p["msg"] for p in pushed}
+            assert replies[1]["error"] == {
+                "code": "refused_content",
+                "message": "lovelace/config/save d: perform_action: shell_command.x "
+                "není přes Homecraft Connector povolený",
+            }
+            assert replies[2]["success"] is True
+            assert [c["id"] for c in seen] == [2]
+            await sessions.close_all()
+
+    asyncio.run(scenario())

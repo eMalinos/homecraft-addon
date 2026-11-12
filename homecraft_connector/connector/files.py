@@ -1,8 +1,8 @@
 import os
 import stat
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
-from . import policy, settings
+from . import content, policy, settings
 
 
 def write_private(path: Path, data: bytes) -> None:
@@ -52,6 +52,7 @@ def write(path: str, text: str) -> None:
     if not isinstance(text, str):
         raise TypeError("text must be a string")
     target = _target("write", path)
+    _check_content(path, target, text)
     target.parent.mkdir(parents=True, exist_ok=True)
     tmp = target.with_name(target.name + TMP_SUFFIX)
     try:
@@ -70,6 +71,21 @@ def write(path: str, text: str) -> None:
     except BaseException:
         tmp.unlink(missing_ok=True)
         raise
+
+
+def _check_content(path: str, target: Path, text: str) -> None:
+    """By the requested and the resolved path (a link into packages/ is a package)."""
+    dirs = {path.split("/", 1)[0], target.relative_to(settings.CONFIG_ROOT.resolve()).parts[0]}
+    if "secrets.yaml" in (PurePosixPath(path).name, target.name):  # what !secret reads
+        what = "soubor secrets.yaml"
+    elif "packages" in dirs:  # HA loads it as configuration
+        what = content.check_yaml(path, text)
+    elif "themes" in dirs:  # loaded through HA's YAML loader too (tags)
+        what = content.check_tags(text)
+    else:  # custom_templates/: Jinja files, not YAML
+        what = None
+    if what:
+        raise content.refused(path, what)
 
 
 def delete(path: str) -> None:

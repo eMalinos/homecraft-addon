@@ -244,13 +244,13 @@ class Client:
     async def _reply(self, request: dict, conn: "_Conn") -> dict:
         started = time.monotonic()
         reply = await self._handle(request, conn)
-        refused = reply.pop("_refused", False)  # ws.send answered as HA would
+        refused = reply.pop("_refused", None)  # ws.send answered as HA would: its code
         error = reply.get("error")
         audit.record(
             str(request.get("op")),
             _audit_target(request),
             error is None and not refused,
-            "not_allowed" if refused else error and error["code"],
+            refused or error and error["code"],
             (time.monotonic() - started) * 1000,
         )
         return reply
@@ -262,7 +262,7 @@ class Client:
         try:
             result = await _dispatch(op, request, conn)
         except policy.OpError as e:
-            if e.code == "not_allowed":
+            if e.code in ("not_allowed", "refused_content"):
                 logger.info("Odmítnuto: %s", e.message)
             return _error(rid, e.code, e.message)
         except (KeyError, TypeError, ValueError, AttributeError) as e:
@@ -271,8 +271,8 @@ class Client:
             # The type only: messages can carry paths, payloads or HA's answers.
             logger.warning("Operace %s selhala: %s", op, type(e).__name__)
             return _error(rid, "internal", type(e).__name__)
-        if result is _REFUSED:
-            return {"id": rid, "ok": True, "result": None, "_refused": True}
+        if isinstance(result, _Refused):
+            return {"id": rid, "ok": True, "result": None, "_refused": result.code}
         return {"id": rid, "ok": True, "result": result}
 
 
@@ -294,7 +294,13 @@ FILE_OPS = {
 }
 
 
-_REFUSED = object()  # ws.send refused by the allowlist (HA-shaped error already pushed)
+@dataclass
+class _Refused:
+    """ws.send refused (the HA-shaped error is already pushed): not_allowed or refused_content."""
+
+    code: str
+
+
 _INGRESS_TOKEN_RE = re.compile(r"^/api/hassio_ingress/[^/]+")
 
 
@@ -323,8 +329,8 @@ async def _dispatch(op: object, req: dict, conn: _Conn) -> object:
     if op == "ws.open":
         return await conn.sessions.open()
     if op == "ws.send":
-        forwarded = await conn.sessions.send(req["session"], req["msg"])
-        return None if forwarded else _REFUSED
+        refused = await conn.sessions.send(req["session"], req["msg"])
+        return _Refused(refused) if refused else None
     if op == "ws.close":
         return await conn.sessions.close(req["session"])
     if op == "http":

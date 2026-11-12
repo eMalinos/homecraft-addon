@@ -60,6 +60,51 @@ InfluxDB a Grafana), několik REST adres (kontrola konfigurace, integrace
 InfluxDB) a soubory jen v `packages/`, `custom_templates/` a `themes/`
 (`configuration.yaml` jen ke čtení). Cokoli jiného odmítne s chybou `not_allowed`.
 
+## Bezpečnost
+
+**Kam** (allowlist, viz výše) a **co**: doplněk před zápisem zkontroluje obsah
+a odmítne s chybou `refused_content` vše, co by spouštělo příkazy nebo posílalo
+data ven (se záznamem v auditu panelu). Seznamy jsou pevně v kódu
+a nastavení je nerozšíří.
+
+- **Soubory v `packages/`** se rozparsují jako YAML. Odmítne se:
+  - klíč `shell_command`, `command_line`, `python_script`, `pyscript`,
+    `rest_command`, `rest`, `scrape`, `panel_custom`, `panel_iframe`, `http`;
+  - `homeassistant:` s `auth_providers`, `packages`, `allowlist_external_dirs`
+    nebo `allowlist_external_urls` (`customize` je v pořádku);
+  - položka s `platform: command_line|shell_command|rest|scrape`;
+  - akce (`action`/`service`/`perform_action`) v doménách `shell_command`,
+    `rest_command`, `python_script`, `pyscript` a `hassio`, i akce, jejíž
+    doména je šablona;
+  - jakýkoli tag HA (`!include*`, `!secret`, `!env_var`, `!input`): načetly by
+    obsah, který kontrolou neprošel. Knihovna žádný nepoužívá. Neplatný YAML.
+- **`themes/`**: kód nespouští (CSS proměnné), ale loader HA v nich tagy
+  vyhodnocuje, proto se odmítnou stejné tagy. `custom_templates/` jsou soubory
+  Jinja, ne YAML. Soubor `secrets.yaml` nelze zapsat nikam.
+- **Automatizace a skripty přes REST** projdou stejnou kontrolou.
+- **Dashboardy** (`lovelace/config/save`): akce karet (`tap_action`,
+  `hold_action`…) se zakázanými službami se odmítnou.
+- **Node-RED** (`POST /flows` posílá všechny flow): kontrolují se nové a změněné
+  uzly a vše, kam vedou (dráty, instance subflow i jejich vnitřek). Smí být jen
+  typu, který používá knihovna Homecraftu, uzel `exec` nikdy. `api-call-service`
+  jen ve verzi 7, se `blockInputOverrides` a službou pevně v uzlu (ne ze
+  zprávy), na kterou se nevztahuje denylist. `function` bez modulů (`libs`).
+  Záložky a subflow uživatele se nesmí změnit vůbec (ani `disabled`). Vlastní
+  flow uživatele, kam nic nového nevede, projdou beze změny.
+  Instalace modulů (`POST /nodes`) povolená není.
+- **go2rtc** (`POST /api/config` přepisuje celý soubor): Homecraft smí změnit jen
+  klíč `webrtc`. Ostatní klíče (`api`, `streams` i s `exec:`, `echo:`, `expr:`…)
+  musí zůstat přesně jak jsou: nesmí se změnit, smazat ani vynulovat.
+
+**Známé limity** (uzavře až úroveň 3, podepsané balíčky):
+
+- Uzel Node-RED `function` spouští JavaScript a uzel `http request` (hlídání
+  bran Shelly ve feature Topení) posílá požadavky na adresu ze zprávy.
+  Kontrola se týká typů uzlů, ne jejich kódu.
+- Šablony Jinja v YAML se nekontrolují (běží v sandboxu HA).
+- Dashboard se kontroluje celý: vlastní karta uživatele se zakázanou akcí na
+  dashboardu, který Homecraft upravuje, jeho uložení zablokuje.
+
 ## Log při startu (self-check)
 
 Doplněk při startu ověří, k čemu má přístup, a do logu zapíše `OK` / `FAIL` /
