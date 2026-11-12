@@ -35,8 +35,13 @@ def ha_error(msg_id: object, code: str, message: str) -> dict:
 class Sessions:
     """The HA sessions of one Homecraft connection; `close_all` when it drops."""
 
-    def __init__(self, http: aiohttp.ClientSession, push: Push) -> None:
-        self._http, self._push = http, push
+    def __init__(
+        self,
+        http: aiohttp.ClientSession,
+        push: Push,
+        paused: Callable[[], bool] = lambda: False,
+    ) -> None:
+        self._http, self._push, self._paused = http, push, paused
         self._open: dict[str, tuple[aiohttp.ClientWebSocketResponse, asyncio.Task]] = {}
         self._opening = 0
 
@@ -79,6 +84,8 @@ class Sessions:
             async for m in ws:
                 if m.type != aiohttp.WSMsgType.TEXT:
                     continue
+                if self._paused():  # set_paused closes the sessions; this covers the gap
+                    continue
                 try:
                     msg = json.loads(m.data)
                 except ValueError:
@@ -115,6 +122,10 @@ class Sessions:
             entry[1].cancel()
             await entry[0].close()
 
-    async def close_all(self) -> None:
-        for sid in list(self._open):
+    async def close_all(self, notify: bool = False) -> None:
+        """`notify`: tell Homecraft (ws.closed), when its connection stays up."""
+        sids = list(self._open)
+        for sid in sids:
             await self.close(sid)
+        for sid in sids if notify else ():
+            await self._push({"op": "ws.closed", "session": sid})

@@ -4,9 +4,15 @@ pause and the audit.
 Only the Supervisor's ingress proxy may talk to it (HA add-on docs: allow
 172.30.32.2, deny everyone else); CONNECTOR_DEV=1 drops that check for the
 dev run without a Supervisor. The Access token is write-only: no response
-carries it, `GET /api/status` says only `token_set`."""
+carries it, `GET /api/status` says only `token_set`.
+
+State-changing requests carry a per-start nonce that only the panel page
+holds. Limit: a script on the same origin (anything else served through HA)
+can fetch the page and read the nonce; HA's own frontend can do far more
+anyway, so the nonce is against other origins and blind requests."""
 
 import logging
+import secrets
 from pathlib import Path
 
 from aiohttp import web
@@ -18,10 +24,14 @@ logger = logging.getLogger(__name__)
 
 INGRESS_PROXY = "172.30.32.2"
 PORT = 8099
-# State-changing requests must carry it: a cross-site form cannot set a custom
-# header, and a cross-site fetch with one needs a CORS preflight we never answer.
+# State-changing requests must carry NONCE in it: a cross-site form cannot set
+# a header, a cross-site fetch with one needs a CORS preflight we never answer,
+# and nobody but the page knows the value.
 CSRF_HEADER = "X-Homecraft-Panel"
-PAGE = (Path(__file__).parent / "panel.html").read_text(encoding="utf-8")
+NONCE = secrets.token_urlsafe(32)
+PAGE = (
+    (Path(__file__).parent / "panel.html").read_text(encoding="utf-8").replace("{{NONCE}}", NONCE)
+)
 SECURITY_HEADERS = {
     "Cache-Control": "no-store",
     "X-Content-Type-Options": "nosniff",
@@ -43,13 +53,16 @@ async def _guard(request: web.Request, handler):
     if not settings.DEV and request.remote != INGRESS_PROXY:
         raise web.HTTPForbidden()
     if request.method not in ("GET", "HEAD") and (
-        request.headers.get(CSRF_HEADER) != "1"
+        not secrets.compare_digest(request.headers.get(CSRF_HEADER, "").encode(), NONCE.encode())
         or request.headers.get("Sec-Fetch-Site", "same-origin") != "same-origin"
     ):
         raise web.HTTPForbidden()
-    response = await handler(request)
+    return await handler(request)
+
+
+async def _security_headers(request: web.Request, response: web.StreamResponse) -> None:
+    """On every response, errors (HTTPException) included."""
     response.headers.update(SECURITY_HEADERS)
-    return response
 
 
 async def _page(request: web.Request) -> web.Response:
@@ -103,13 +116,14 @@ async def _save_token(request: web.Request) -> web.Response:
 async def _clear_token(request: web.Request) -> web.Response:
     access_token.clear()
     logger.info("Přístupový token smazán v panelu")
+    request.app[CLIENT].reconnect_now()  # drop the connection made with it
     return web.json_response({"ok": True})
 
 
 async def _pause(request: web.Request) -> web.Response:
     paused = await _json_field(request, "paused", bool)
     state.save_paused(paused)
-    request.app[CLIENT].paused = paused
+    await request.app[CLIENT].set_paused(paused)
     logger.info("Homecraft %s v panelu", "pozastaven" if paused else "znovu povolen")
     return web.json_response({"ok": True, "paused": paused})
 
@@ -121,6 +135,7 @@ async def _reconnect(request: web.Request) -> web.Response:
 
 def make_app(client: Client, pairing_code: str) -> web.Application:
     app = web.Application(middlewares=[_guard], client_max_size=16 * 1024)
+    app.on_response_prepare.append(_security_headers)
     app[CLIENT] = client
     app[PAIRING_CODE] = pairing_code
     app.router.add_get("/", _page)

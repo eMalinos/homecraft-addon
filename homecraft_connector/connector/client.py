@@ -22,6 +22,9 @@ MAX_MSG_SIZE = 16 * 1024 * 1024
 # What we send: the backend (uvicorn) closes the connection over 16 MiB.
 MAX_FRAME = 15 * 1024 * 1024
 MAX_CONCURRENT_OPS = 4  # http and file.* at once; ws.* are not limited
+# The hub has no "welcome": it checks the hello at once and closes on a bad
+# one. Still open this long after the hello (or any request) = accepted.
+HELLO_ACCEPTED_AFTER = 3.0
 
 # Not paired (4401) or no valid Access token (403): retrying every minute
 # forever would only knock on a closed door, so slow down to once an hour.
@@ -70,12 +73,36 @@ class Client:
         # For the panel: never a token or a payload in last_error.
         self.connected = False
         self.last_error: str | None = None
-        self.last_connected: float | None = None  # unix time of the last connect
+        self.last_connected: float | None = None  # unix time hello was accepted
+        self._ws: aiohttp.ClientWebSocketResponse | None = None
+        self._conn: _Conn | None = None
+        self._dropping = False
+        self._closers: set[asyncio.Task] = set()
 
     def reconnect_now(self) -> None:
-        """Skip the current wait (panel button **Připojit znovu**, #556)."""
+        """Connect again at once (panel: **Připojit znovu**, token saved or deleted):
+        skip the current wait, or drop the open connection so the next one uses
+        the current token."""
         self.backoff.reset()
         self._wake.set()
+        if self._ws is not None and not self._ws.closed:
+            self._dropping = True
+            task = asyncio.get_running_loop().create_task(self._ws.close())
+            self._closers.add(task)
+            task.add_done_callback(self._closers.discard)
+
+    async def set_paused(self, paused: bool) -> None:
+        """Pausing also closes every open HA session (Homecraft gets ws.closed)."""
+        self.paused = paused
+        if paused and self._conn is not None:
+            try:
+                await self._conn.sessions.close_all(notify=True)
+            except (ConnectionError, aiohttp.ClientError, RuntimeError):
+                pass  # Homecraft is gone too; the sessions are closed either way
+
+    def _accepted(self) -> None:
+        if not self.connected:
+            self.connected, self.last_connected, self.last_error = True, time.time(), None
 
     async def wait(self, delay: float) -> None:
         """Sleep `delay` (+ up to 10 % jitter) unless `reconnect_now` cuts it short."""
@@ -103,12 +130,13 @@ class Client:
             {"CF-Access-Client-Id": token[0], "CF-Access-Client-Secret": token[1]} if token else {}
         )
         started = None
+        self._dropping = False
         try:
             async with session.ws_connect(
                 self.server_url, headers=headers, heartbeat=30, max_msg_size=MAX_MSG_SIZE
             ) as ws:
                 started = time.monotonic()
-                self.connected, self.last_connected = True, time.time()
+                self._ws = ws
                 logger.info("Připojeno k %s", self.server_url)
                 await self._serve(ws, session)
                 code = ws.close_code
@@ -121,11 +149,14 @@ class Client:
         except (TimeoutError, aiohttp.ClientError, OSError) as e:
             return self._failed(False, f"Homecraft nedostupný: {type(e).__name__}")
         finally:
-            self.connected = False
+            self.connected, self._ws = False, None
             if started is not None and time.monotonic() - started >= STABLE_AFTER:
                 self.backoff.reset()
         if code == CLOSE_UNAUTHORIZED:
             return self._failed(True, "Agent není spárovaný — vlož párovací kód v Homecraftu")
+        if self._dropping:
+            logger.info("Spojení s Homecraftem ukončeno z panelu")
+            return False
         logger.info("Spojení s Homecraftem skončilo (kód %s)", code)
         self.last_error = f"Spojení skončilo (kód {code})"
         return False
@@ -151,8 +182,10 @@ class Client:
             async with lock:
                 await ws.send_str(text)
 
-        conn = _Conn(ws_proxy.Sessions(http, send), http_proxy.HttpProxy(http))
+        conn = _Conn(ws_proxy.Sessions(http, send, lambda: self.paused), http_proxy.HttpProxy(http))
+        self._conn = conn
         sessions = conn.sessions
+        accept = asyncio.get_running_loop().call_later(HELLO_ACCEPTED_AFTER, self._accepted)
         tasks: set[asyncio.Task] = set()
 
         async def respond(request: dict) -> None:
@@ -194,6 +227,7 @@ class Client:
                         }
                     )
                 elif "id" in data:
+                    self._accepted()  # requests come only after an accepted hello
                     if data.get("op") in ("ws.send", "ws.close"):
                         await respond(data)  # inline: a session keeps its message order
                     else:
@@ -201,6 +235,8 @@ class Client:
                         tasks.add(task)
                         task.add_done_callback(tasks.discard)
         finally:
+            accept.cancel()
+            self._conn = None
             for task in list(tasks):
                 task.cancel()
             await sessions.close_all()
@@ -221,7 +257,7 @@ class Client:
 
     async def _handle(self, request: dict, conn: "_Conn") -> dict:
         rid, op = request["id"], request.get("op")
-        if self.paused:
+        if self.paused and op != "ws.close":  # Homecraft may still close its sessions
             return _error(rid, "paused", "")
         try:
             result = await _dispatch(op, request, conn)

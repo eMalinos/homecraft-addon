@@ -24,9 +24,20 @@ def test_load_trims_the_file_and_fills_memory(data_dir):
     assert len(kept) == audit.KEEP and kept[-1] == "not json"
     assert audit.recent()[0]["target"] == "1499" and len(audit.recent()) == audit.MAXLEN - 1
     audit.record("ws.open", "", False, "ha_unreachable")
+    audit.flush()
     assert json.loads((data_dir / "audit.jsonl").read_text().splitlines()[-1])["code"] == (
         "ha_unreachable"
     )
+
+
+def test_file_is_trimmed_at_runtime(data_dir, monkeypatch):
+    monkeypatch.setattr(audit, "KEEP", 10)
+    audit.load()
+    for i in range(21):
+        audit.record("http", str(i), True)
+    audit.flush()
+    lines = (data_dir / "audit.jsonl").read_text().splitlines()
+    assert len(lines) == 10 and json.loads(lines[-1])["target"] == "20"
 
 
 def test_targets_carry_no_content():
@@ -52,6 +63,7 @@ def test_operations_are_audited(tmp_path, monkeypatch):
         ],
         expect=4,
     )
+    audit.flush()
     rows = {r["target"]: r for r in audit.recent()}
     assert rows["packages/a.yaml"]["ok"] is True and rows["packages/a.yaml"]["op"] == "file.write"
     assert rows["secrets.yaml"]["code"] == "not_allowed"

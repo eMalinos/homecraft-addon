@@ -80,7 +80,8 @@ td.ok { color: var(--ok); } td.bad { color: var(--bad); } td.warn { color: var(-
     <h2>Pozastavení</h2>
     <label class="switch"><input type="checkbox" id="paused"> Pozastavit Homecraft</label>
     <p class="muted">Při pozastavení doplněk odmítne každý požadavek z Homecraftu (chyba „paused“).
-      Spojení zůstává, nastavení přežije restart doplňku.</p>
+      Otevřená sezení do Home Assistantu se hned zavřou, spojení s Homecraftem zůstává.
+      Nastavení přežije restart doplňku.</p>
     <div id="pauseMsg" class="msg"></div>
   </section>
 
@@ -123,10 +124,12 @@ td.ok { color: var(--ok); } td.bad { color: var(--bad); } td.warn { color: var(-
 "use strict";
 // Relative URLs: under ingress the panel lives below /api/hassio_ingress/<token>/.
 const $ = (id) => document.getElementById(id);
+const NONCE = "{{NONCE}}";
 let editingToken = false;
+let deleteArmed = null;
 
 async function call(method, path, body) {
-  const opts = { method, headers: { "X-Homecraft-Panel": "1" } };
+  const opts = { method, headers: { "X-Homecraft-Panel": NONCE } };
   if (body !== undefined) {
     opts.headers["Content-Type"] = "application/json";
     opts.body = JSON.stringify(body);
@@ -242,8 +245,19 @@ $("tokenForm").onsubmit = async (ev) => {
 
 $("tokenChange").onclick = () => { editingToken = true; show("tokenMsg", ""); refresh(); };
 $("tokenCancel").onclick = () => { editingToken = false; $("token").value = ""; refresh(); };
+// Two steps instead of confirm(): the Companion app's webview may suppress dialogs.
+function disarmDelete() {
+  clearTimeout(deleteArmed);
+  deleteArmed = null;
+  $("tokenDelete").textContent = "Smazat";
+}
 $("tokenDelete").onclick = async () => {
-  if (!confirm("Smazat přístupový token? Doplněk se pak k Homecraftu nepřipojí.")) return;
+  if (!deleteArmed) {
+    $("tokenDelete").textContent = "Opravdu smazat? Doplněk se odpojí";
+    deleteArmed = setTimeout(disarmDelete, 5000);
+    return;
+  }
+  disarmDelete();
   try {
     await call("DELETE", "api/access-token");
     show("tokenMsg", "Token smazán.");

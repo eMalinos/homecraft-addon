@@ -1,4 +1,4 @@
-"""The pause stops every operation and survives a restart."""
+"""The pause stops every operation (but ws.close) and survives a restart."""
 
 from test_client_ops import run_against_homecraft
 
@@ -18,10 +18,14 @@ OPS = [
 
 def test_pause_blocks_every_operation(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "CONFIG_ROOT", tmp_path)
-    got = run_against_homecraft(OPS, expect=len(OPS), paused=True)
-    assert {g["id"]: g["error"]["code"] for g in got} == {o["id"]: "paused" for o in OPS}
+    got = {g["id"]: g for g in run_against_homecraft(OPS, expect=len(OPS), paused=True)}
+    # ws.close is still answered: Homecraft may close its sessions while paused
+    assert got.pop(2) == {"id": 2, "ok": True, "result": None}
+    assert {i: g["error"]["code"] for i, g in got.items()} == {
+        o["id"]: "paused" for o in OPS if o["id"] != 2
+    }
     assert not (tmp_path / "packages").exists()
-    assert {r["code"] for r in audit.recent()} == {"paused"}
+    assert sorted(r["code"] or "ok" for r in audit.recent()) == ["ok"] + ["paused"] * 7
 
 
 def test_paused_survives_a_restart():

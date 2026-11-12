@@ -30,18 +30,26 @@ Zadává se v panelu doplňku.
 Panel je dostupný jen přes Home Assistant (ingress), nikde jinde neposlouchá.
 
 - **Spojení**: připojeno/odpojeno, adresa Homecraftu, čas posledního spojení,
-  poslední chyba a tlačítko **Připojit znovu** (zkusí to hned, bez čekání).
+  poslední chyba a tlačítko **Připojit znovu** (zkusí to hned, bez čekání;
+  otevřené spojení ukončí a naváže znovu).
 - **Pozastavit Homecraft**: dokud je zapnuto, doplněk odmítne každý požadavek
-  z Homecraftu chybou `paused` (Plan i Apply v Homecraftu skončí chybou).
-  Spojení zůstává. Pauza platí okamžitě a přežije restart doplňku.
+  z Homecraftu chybou `paused` (Plan i Apply v Homecraftu skončí chybou)
+  a hned zavře všechna otevřená sezení Homecraftu do Home Assistantu. Spojení
+  s Homecraftem zůstává. Pauza přežije restart doplňku.
 - **Párovací kód** s tlačítkem **Kopírovat**.
 - **Přístupový token Homecraftu**: jde jen zadat, změnit a smazat. Po uložení
   panel ukazuje jen „Token nastaven ✓“; token není vidět v panelu, v nastavení
-  doplňku ani v jeho YAML a nepíše se do logu.
+  doplňku ani v jeho YAML a nepíše se do logu. Uložení i smazání tokenu
+  ukončí současné spojení s Homecraftem (nové použije nový token).
 - **Audit**: posledních 200 operací (čas, operace, cíl, výsledek, trvání).
   Cíl je typ příkazu WebSocketu, metoda a cesta HTTP nebo cesta souboru,
   nikdy obsah souborů, těla požadavků ani tokeny. Soubor `/data/audit.jsonl`
   drží posledních 1000 záznamů.
+
+Změny v panelu (token, pauza, připojení) přijme doplněk jen s tajnou hodnotou,
+kterou při každém startu vloží do stránky panelu. Cizí stránka ji nezná.
+Skript ze stejného původu (cokoli, co běží v Home Assistantu) si ale stránku
+panelu načíst a hodnotu přečíst může.
 
 ## Co smí Homecraft dělat
 

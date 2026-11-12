@@ -261,3 +261,28 @@ def test_http_ingress_per_addon_routes(monkeypatch):
             assert len(asked) == len(http_proxy.policy.ADDONS)
 
     asyncio.run(scenario())
+
+
+def test_paused_sessions_push_nothing_and_close_all_notifies(monkeypatch):
+    async def scenario():
+        async with fake_ha(monkeypatch) as (seen, _), aiohttp.ClientSession() as http:
+            pushed: list[dict] = []
+            paused = [False]
+
+            async def push(data):
+                pushed.append(data)
+
+            sessions = ws_proxy.Sessions(http, push, lambda: paused[0])
+            sid = (await sessions.open())["session"]
+            paused[0] = True
+            await sessions.send(sid, {"id": 1, "type": "get_states"})
+            for _ in range(100):
+                if seen:
+                    break
+                await asyncio.sleep(0.01)
+            await asyncio.sleep(0.1)  # HA has answered by now
+            assert seen and pushed == []
+            await sessions.close_all(notify=True)
+            assert pushed == [{"op": "ws.closed", "session": sid}]
+
+    asyncio.run(scenario())

@@ -2,7 +2,7 @@
 
 from connector import access_token, panel
 
-CSRF = {panel.CSRF_HEADER: "1"}
+CSRF = {panel.CSRF_HEADER: panel.NONCE}
 SECRET = "s3cr3t-value-0123456789abcdef"
 TOKEN = f"client-id.access:{SECRET}"
 

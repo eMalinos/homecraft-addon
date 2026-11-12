@@ -7,7 +7,8 @@
 - Přístupový token Homecraftu se zadává v panelu. Jde jen uložit, změnit nebo
   smazat, zpátky ho panel nikdy neukáže.
 - Přepínač **Pozastavit Homecraft**: každý požadavek pak skončí chybou `paused`.
-  Pauza přežije restart; volba `paused` ji při startu zapne.
+  Pauza hned zavře otevřená sezení do HA a přežije restart; volba `paused`
+  ji při startu zapne.
 - Audit posledních 200 operací (čas, operace, cíl, výsledek, trvání) bez obsahu
   souborů a tokenů; `/data/audit.jsonl` drží posledních 1000.
 

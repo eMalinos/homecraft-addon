@@ -2,7 +2,7 @@
 
 from connector import panel, state
 
-CSRF = {panel.CSRF_HEADER: "1"}
+CSRF = {panel.CSRF_HEADER: panel.NONCE}
 
 
 def test_refuses_anyone_but_the_ingress_proxy(run_panel):
@@ -85,3 +85,22 @@ def test_reconnect_skips_the_wait(run_panel, agent):
     assert run_panel(scenario) == 200
     assert agent._wake.is_set()
     assert agent.backoff.next(refused=True) == 60  # started over
+
+
+def test_wrong_nonce_is_refused_with_security_headers(run_panel):
+    async def scenario(http):
+        resp = await http.post("/api/reconnect", headers={panel.CSRF_HEADER: "1"})
+        return resp.status, resp.headers
+
+    status, headers = run_panel(scenario)
+    assert status == 403
+    assert "default-src 'none'" in headers["Content-Security-Policy"]
+    assert headers["Cache-Control"] == "no-store" and headers["X-Content-Type-Options"] == "nosniff"
+
+
+def test_page_carries_the_nonce(run_panel):
+    async def scenario(http):
+        return await (await http.get("/")).text()
+
+    html = run_panel(scenario)
+    assert f'const NONCE = "{panel.NONCE}"' in html and "{{NONCE}}" not in html

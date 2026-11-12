@@ -1,16 +1,19 @@
 """What Homecraft did: the last operations, for the panel (#556).
 
 Kept in memory (the last `MAXLEN`) and appended to /data/audit.jsonl, which
-`load` trims to the last `KEEP` lines at start. A record names the operation
-and its target (WS command type, HTTP method + path, file path), never a
-payload, file content or token."""
+holds the last `KEEP` lines (trimmed at start and once it passes 2 × KEEP).
+A record names the operation and its target (WS command type, HTTP method +
+path, file path), never a payload, file content or token."""
 
 import json
 import logging
 import time
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 from . import settings
+from .files import write_private
 
 logger = logging.getLogger(__name__)
 
@@ -19,30 +22,54 @@ KEEP = 1000
 MAX_TARGET = 200
 
 _recent: deque[dict] = deque(maxlen=MAXLEN)
+# One worker: the file is written off the event loop, in order.
+_writer = ThreadPoolExecutor(max_workers=1, thread_name_prefix="audit")
+_lines = 0  # in the file; touched by the writer only (and by load before it runs)
 
 
-def _path():
+def _path() -> Path:
     return settings.DATA_DIR / "audit.jsonl"
 
 
-def load() -> None:
-    """At start: trim the file to its last KEEP lines and fill memory from it."""
-    _recent.clear()
+def _trim(path: Path) -> list[str]:
+    """Keep the file's last KEEP lines (atomic rewrite); returns them."""
+    global _lines
     try:
-        lines = _path().read_text(encoding="utf-8").splitlines()[-KEEP:]
-    except (FileNotFoundError, UnicodeDecodeError):
-        return
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeDecodeError):
+        lines = []
+    lines = lines[-KEEP:]
     try:
-        _path().write_text("".join(line + "\n" for line in lines), encoding="utf-8")
+        write_private(path, "".join(line + "\n" for line in lines).encode())
     except OSError as e:
         logger.warning("Audit nelze zkrátit: %s", type(e).__name__)
-    for line in lines[-MAXLEN:]:
+    _lines = len(lines)
+    return lines
+
+
+def load() -> None:
+    """At start: trim the file and fill memory from it."""
+    _recent.clear()
+    for line in _trim(_path())[-MAXLEN:]:
         try:
             entry = json.loads(line)
         except ValueError:
             continue
         if isinstance(entry, dict):
             _recent.append(entry)
+
+
+def _append(path: Path, line: str) -> None:
+    global _lines
+    try:
+        with path.open("a", encoding="utf-8") as f:
+            f.write(line)
+    except OSError as e:
+        logger.warning("Audit nelze zapsat: %s", type(e).__name__)
+        return
+    _lines += 1
+    if _lines > 2 * KEEP:
+        _trim(path)
 
 
 def record(
@@ -58,12 +85,12 @@ def record(
         "ms": None if duration_ms is None else round(duration_ms, 1),
     }
     _recent.append(entry)
-    # ponytail: one append per operation (sync, small); batch it if the disk shows up
-    try:
-        with _path().open("a", encoding="utf-8") as f:
-            f.write(json.dumps(entry) + "\n")
-    except OSError as e:
-        logger.warning("Audit nelze zapsat: %s", type(e).__name__)
+    _writer.submit(_append, _path(), json.dumps(entry) + "\n")
+
+
+def flush() -> None:
+    """Wait for the pending writes (tests)."""
+    _writer.submit(lambda: None).result()
 
 
 def recent() -> list[dict]:
