@@ -5,9 +5,12 @@ Cloudflare). Home Assistant nepotřebuje veřejnou adresu, přesměrování port
 
 ## Spárování
 
-1. Spusť doplněk a otevři jeho **Log**.
-2. Najdi řádek `Párovací kód: …` a kód zkopíruj.
-3. V Homecraftu otevři projekt → připojení HA → **Homecraft Connector**, vlož kód do **Pairing code** a dej **Pair**.
+1. Spusť doplněk a otevři jeho panel **Homecraft** v postranním menu HA
+   (nebo **Otevřít webové rozhraní** u doplňku).
+2. Do **Přístupový token Homecraftu** vlož token, který ti dal Homecraft, a dej **Uložit**.
+3. Párovací kód zkopíruj tlačítkem **Kopírovat** (je i v **Logu** na řádku `Párovací kód: …`).
+4. V Homecraftu otevři projekt → připojení HA → **Homecraft Connector**, vlož kód do **Pairing code** a dej **Pair**.
+5. V panelu dej **Připojit znovu**, ať doplněk nečeká na další pokus.
 
 Kód obsahuje jen identifikátor doplňku a jeho veřejný klíč, žádné tajemství.
 Soukromý klíč zůstává v doplňku (`/data`).
@@ -17,10 +20,36 @@ Soukromý klíč zůstává v doplňku (`/data`).
 | Volba | Výchozí | Význam |
 |---|---|---|
 | `server_url` | `wss://agent.homecraft.cz/api/agent/ws` | Adresa Homecraftu. |
-| `paused` | `false` | Pozastaví provádění požadavků z Homecraftu. |
+| `paused` | `false` | `true` zapne pauzu při každém startu (vypnout ji pak jde jen v panelu do dalšího restartu). |
 
-Přístupový token Cloudflare se do možností **nezadává** (byl by v nich čitelný).
+Přístupový token se do možností **nezadává** (byl by v nich čitelný).
 Zadává se v panelu doplňku.
+
+## Panel
+
+Panel je dostupný jen přes Home Assistant (ingress), nikde jinde neposlouchá.
+
+- **Spojení**: připojeno/odpojeno, adresa Homecraftu, čas posledního spojení,
+  poslední chyba a tlačítko **Připojit znovu** (zkusí to hned, bez čekání;
+  otevřené spojení ukončí a naváže znovu).
+- **Pozastavit Homecraft**: dokud je zapnuto, doplněk odmítne každý požadavek
+  z Homecraftu chybou `paused` (Plan i Apply v Homecraftu skončí chybou)
+  a hned zavře všechna otevřená sezení Homecraftu do Home Assistantu. Spojení
+  s Homecraftem zůstává. Pauza přežije restart doplňku.
+- **Párovací kód** s tlačítkem **Kopírovat**.
+- **Přístupový token Homecraftu**: jde jen zadat, změnit a smazat. Po uložení
+  panel ukazuje jen „Token nastaven ✓“; token není vidět v panelu, v nastavení
+  doplňku ani v jeho YAML a nepíše se do logu. Uložení i smazání tokenu
+  ukončí současné spojení s Homecraftem (nové použije nový token).
+- **Audit**: posledních 200 operací (čas, operace, cíl, výsledek, trvání).
+  Cíl je typ příkazu WebSocketu, metoda a cesta HTTP nebo cesta souboru,
+  nikdy obsah souborů, těla požadavků ani tokeny. Soubor `/data/audit.jsonl`
+  drží posledních 1000 záznamů.
+
+Změny v panelu (token, pauza, připojení) přijme doplněk jen s tajnou hodnotou,
+kterou při každém startu vloží do stránky panelu. Cizí stránka ji nezná.
+Skript ze stejného původu (cokoli, co běží v Home Assistantu) si ale stránku
+panelu načíst a hodnotu přečíst může.
 
 ## Co smí Homecraft dělat
 
@@ -39,5 +68,9 @@ dosah na Home Assistant. Nic nemění.
 
 ## Odpojení
 
-Spárování zrušíš v Homecraftu. Doplněk se pak připojuje čím dál řidčeji
-(1, 5, 15, 60 minut, dál jednou za hodinu), dokud ho znovu nespáruješ nebo neodinstaluješ.
+- Na chvíli: **Pozastavit Homecraft** v panelu.
+- Úplně: zruš spárování v Homecraftu, nebo doplněk odinstaluj (smaže se
+  i jeho identita, token a audit v `/data`).
+
+Bez spárování se doplněk připojuje čím dál řidčeji (1, 5, 15, 60 minut, dál
+jednou za hodinu), dokud ho znovu nespáruješ nebo neodinstaluješ.

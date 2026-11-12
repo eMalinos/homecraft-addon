@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import random
+import re
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -11,7 +12,7 @@ from dataclasses import dataclass, field
 import aiohttp
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from . import access_token, files, http_proxy, identity, policy, ws_proxy
+from . import access_token, audit, files, http_proxy, identity, policy, ws_proxy
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +22,9 @@ MAX_MSG_SIZE = 16 * 1024 * 1024
 # What we send: the backend (uvicorn) closes the connection over 16 MiB.
 MAX_FRAME = 15 * 1024 * 1024
 MAX_CONCURRENT_OPS = 4  # http and file.* at once; ws.* are not limited
+# The hub has no "welcome": it checks the hello at once and closes on a bad
+# one. Still open this long after the hello (or any request) = accepted.
+HELLO_ACCEPTED_AFTER = 3.0
 
 # Not paired (4401) or no valid Access token (403): retrying every minute
 # forever would only knock on a closed door, so slow down to once an hour.
@@ -66,11 +70,39 @@ class Client:
         self.paused = paused
         self.backoff = Backoff()
         self._wake = asyncio.Event()
+        # For the panel: never a token or a payload in last_error.
+        self.connected = False
+        self.last_error: str | None = None
+        self.last_connected: float | None = None  # unix time hello was accepted
+        self._ws: aiohttp.ClientWebSocketResponse | None = None
+        self._conn: _Conn | None = None
+        self._dropping = False
+        self._closers: set[asyncio.Task] = set()
 
     def reconnect_now(self) -> None:
-        """Skip the current wait (panel button **Připojit znovu**, #556)."""
+        """Connect again at once (panel: **Připojit znovu**, token saved or deleted):
+        skip the current wait, or drop the open connection so the next one uses
+        the current token."""
         self.backoff.reset()
         self._wake.set()
+        if self._ws is not None and not self._ws.closed:
+            self._dropping = True
+            task = asyncio.get_running_loop().create_task(self._ws.close())
+            self._closers.add(task)
+            task.add_done_callback(self._closers.discard)
+
+    async def set_paused(self, paused: bool) -> None:
+        """Pausing also closes every open HA session (Homecraft gets ws.closed)."""
+        self.paused = paused
+        if paused and self._conn is not None:
+            try:
+                await self._conn.sessions.close_all(notify=True)
+            except (ConnectionError, aiohttp.ClientError, RuntimeError):
+                pass  # Homecraft is gone too; the sessions are closed either way
+
+    def _accepted(self) -> None:
+        if not self.connected:
+            self.connected, self.last_connected, self.last_error = True, time.time(), None
 
     async def wait(self, delay: float) -> None:
         """Sleep `delay` (+ up to 10 % jitter) unless `reconnect_now` cuts it short."""
@@ -98,31 +130,41 @@ class Client:
             {"CF-Access-Client-Id": token[0], "CF-Access-Client-Secret": token[1]} if token else {}
         )
         started = None
+        self._dropping = False
         try:
             async with session.ws_connect(
                 self.server_url, headers=headers, heartbeat=30, max_msg_size=MAX_MSG_SIZE
             ) as ws:
                 started = time.monotonic()
+                self._ws = ws
                 logger.info("Připojeno k %s", self.server_url)
                 await self._serve(ws, session)
                 code = ws.close_code
         except aiohttp.WSServerHandshakeError as e:
             if access_refused(e):
-                logger.warning("Chybí nebo neplatí přístupový token — zadej ho v panelu add-onu")
-                return True
-            logger.warning("Homecraft odmítl spojení (HTTP %s)", e.status)
-            return False
+                return self._failed(
+                    True, "Chybí nebo neplatí přístupový token — zadej ho v panelu add-onu"
+                )
+            return self._failed(False, f"Homecraft odmítl spojení (HTTP {e.status})")
         except (TimeoutError, aiohttp.ClientError, OSError) as e:
-            logger.warning("Homecraft nedostupný: %s", type(e).__name__)
-            return False
+            return self._failed(False, f"Homecraft nedostupný: {type(e).__name__}")
         finally:
+            self.connected, self._ws = False, None
             if started is not None and time.monotonic() - started >= STABLE_AFTER:
                 self.backoff.reset()
         if code == CLOSE_UNAUTHORIZED:
-            logger.warning("Agent není spárovaný — vlož párovací kód v Homecraftu")
-            return True
+            return self._failed(True, "Agent není spárovaný — vlož párovací kód v Homecraftu")
+        if self._dropping:
+            logger.info("Spojení s Homecraftem ukončeno z panelu")
+            return False
         logger.info("Spojení s Homecraftem skončilo (kód %s)", code)
+        self.last_error = f"Spojení skončilo (kód {code})"
         return False
+
+    def _failed(self, refused: bool, message: str) -> bool:
+        logger.warning("%s", message)
+        self.last_error = message
+        return refused
 
     async def _serve(
         self, ws: aiohttp.ClientWebSocketResponse, http: aiohttp.ClientSession
@@ -140,8 +182,10 @@ class Client:
             async with lock:
                 await ws.send_str(text)
 
-        conn = _Conn(ws_proxy.Sessions(http, send), http_proxy.HttpProxy(http))
+        conn = _Conn(ws_proxy.Sessions(http, send, lambda: self.paused), http_proxy.HttpProxy(http))
+        self._conn = conn
         sessions = conn.sessions
+        accept = asyncio.get_running_loop().call_later(HELLO_ACCEPTED_AFTER, self._accepted)
         tasks: set[asyncio.Task] = set()
 
         async def respond(request: dict) -> None:
@@ -183,6 +227,7 @@ class Client:
                         }
                     )
                 elif "id" in data:
+                    self._accepted()  # requests come only after an accepted hello
                     if data.get("op") in ("ws.send", "ws.close"):
                         await respond(data)  # inline: a session keeps its message order
                     else:
@@ -190,13 +235,29 @@ class Client:
                         tasks.add(task)
                         task.add_done_callback(tasks.discard)
         finally:
+            accept.cancel()
+            self._conn = None
             for task in list(tasks):
                 task.cancel()
             await sessions.close_all()
 
     async def _reply(self, request: dict, conn: "_Conn") -> dict:
+        started = time.monotonic()
+        reply = await self._handle(request, conn)
+        refused = reply.pop("_refused", False)  # ws.send answered as HA would
+        error = reply.get("error")
+        audit.record(
+            str(request.get("op")),
+            _audit_target(request),
+            error is None and not refused,
+            "not_allowed" if refused else error and error["code"],
+            (time.monotonic() - started) * 1000,
+        )
+        return reply
+
+    async def _handle(self, request: dict, conn: "_Conn") -> dict:
         rid, op = request["id"], request.get("op")
-        if self.paused:
+        if self.paused and op != "ws.close":  # Homecraft may still close its sessions
             return _error(rid, "paused", "")
         try:
             result = await _dispatch(op, request, conn)
@@ -210,6 +271,8 @@ class Client:
             # The type only: messages can carry paths, payloads or HA's answers.
             logger.warning("Operace %s selhala: %s", op, type(e).__name__)
             return _error(rid, "internal", type(e).__name__)
+        if result is _REFUSED:
+            return {"id": rid, "ok": True, "result": None, "_refused": True}
         return {"id": rid, "ok": True, "result": result}
 
 
@@ -231,11 +294,37 @@ FILE_OPS = {
 }
 
 
+_REFUSED = object()  # ws.send refused by the allowlist (HA-shaped error already pushed)
+_INGRESS_TOKEN_RE = re.compile(r"^/api/hassio_ingress/[^/]+")
+
+
+def _audit_target(req: dict) -> str:
+    """What an operation touched, without its content (and without ingress tokens)."""
+    op = req.get("op")
+    if op == "ws.send":
+        msg = req.get("msg")
+        if not isinstance(msg, dict):
+            return ""
+        kind = str(msg.get("type"))
+        if kind == "call_service":
+            return f"{kind} {msg.get('domain')}.{msg.get('service')}"
+        if kind == "supervisor/api":
+            return f"{kind} {msg.get('method', 'get')} {msg.get('endpoint')}"
+        return kind
+    if op == "http":
+        path = _INGRESS_TOKEN_RE.sub("/api/hassio_ingress/…", str(req.get("path", "")))
+        return f"{req.get('method')} {path.split('?', 1)[0]}"
+    if op in FILE_OPS:
+        return str(req.get("path"))
+    return ""
+
+
 async def _dispatch(op: object, req: dict, conn: _Conn) -> object:
     if op == "ws.open":
         return await conn.sessions.open()
     if op == "ws.send":
-        return await conn.sessions.send(req["session"], req["msg"])
+        forwarded = await conn.sessions.send(req["session"], req["msg"])
+        return None if forwarded else _REFUSED
     if op == "ws.close":
         return await conn.sessions.close(req["session"])
     if op == "http":
