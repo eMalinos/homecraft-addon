@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import random
+import re
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -11,7 +12,7 @@ from dataclasses import dataclass, field
 import aiohttp
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from . import access_token, files, http_proxy, identity, policy, ws_proxy
+from . import access_token, audit, files, http_proxy, identity, policy, ws_proxy
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +67,10 @@ class Client:
         self.paused = paused
         self.backoff = Backoff()
         self._wake = asyncio.Event()
+        # For the panel: never a token or a payload in last_error.
+        self.connected = False
+        self.last_error: str | None = None
+        self.last_connected: float | None = None  # unix time of the last connect
 
     def reconnect_now(self) -> None:
         """Skip the current wait (panel button **Připojit znovu**, #556)."""
@@ -103,26 +108,32 @@ class Client:
                 self.server_url, headers=headers, heartbeat=30, max_msg_size=MAX_MSG_SIZE
             ) as ws:
                 started = time.monotonic()
+                self.connected, self.last_connected = True, time.time()
                 logger.info("Připojeno k %s", self.server_url)
                 await self._serve(ws, session)
                 code = ws.close_code
         except aiohttp.WSServerHandshakeError as e:
             if access_refused(e):
-                logger.warning("Chybí nebo neplatí přístupový token — zadej ho v panelu add-onu")
-                return True
-            logger.warning("Homecraft odmítl spojení (HTTP %s)", e.status)
-            return False
+                return self._failed(
+                    True, "Chybí nebo neplatí přístupový token — zadej ho v panelu add-onu"
+                )
+            return self._failed(False, f"Homecraft odmítl spojení (HTTP {e.status})")
         except (TimeoutError, aiohttp.ClientError, OSError) as e:
-            logger.warning("Homecraft nedostupný: %s", type(e).__name__)
-            return False
+            return self._failed(False, f"Homecraft nedostupný: {type(e).__name__}")
         finally:
+            self.connected = False
             if started is not None and time.monotonic() - started >= STABLE_AFTER:
                 self.backoff.reset()
         if code == CLOSE_UNAUTHORIZED:
-            logger.warning("Agent není spárovaný — vlož párovací kód v Homecraftu")
-            return True
+            return self._failed(True, "Agent není spárovaný — vlož párovací kód v Homecraftu")
         logger.info("Spojení s Homecraftem skončilo (kód %s)", code)
+        self.last_error = f"Spojení skončilo (kód {code})"
         return False
+
+    def _failed(self, refused: bool, message: str) -> bool:
+        logger.warning("%s", message)
+        self.last_error = message
+        return refused
 
     async def _serve(
         self, ws: aiohttp.ClientWebSocketResponse, http: aiohttp.ClientSession
@@ -195,6 +206,20 @@ class Client:
             await sessions.close_all()
 
     async def _reply(self, request: dict, conn: "_Conn") -> dict:
+        started = time.monotonic()
+        reply = await self._handle(request, conn)
+        refused = reply.pop("_refused", False)  # ws.send answered as HA would
+        error = reply.get("error")
+        audit.record(
+            str(request.get("op")),
+            _audit_target(request),
+            error is None and not refused,
+            "not_allowed" if refused else error and error["code"],
+            (time.monotonic() - started) * 1000,
+        )
+        return reply
+
+    async def _handle(self, request: dict, conn: "_Conn") -> dict:
         rid, op = request["id"], request.get("op")
         if self.paused:
             return _error(rid, "paused", "")
@@ -210,6 +235,8 @@ class Client:
             # The type only: messages can carry paths, payloads or HA's answers.
             logger.warning("Operace %s selhala: %s", op, type(e).__name__)
             return _error(rid, "internal", type(e).__name__)
+        if result is _REFUSED:
+            return {"id": rid, "ok": True, "result": None, "_refused": True}
         return {"id": rid, "ok": True, "result": result}
 
 
@@ -231,11 +258,37 @@ FILE_OPS = {
 }
 
 
+_REFUSED = object()  # ws.send refused by the allowlist (HA-shaped error already pushed)
+_INGRESS_TOKEN_RE = re.compile(r"^/api/hassio_ingress/[^/]+")
+
+
+def _audit_target(req: dict) -> str:
+    """What an operation touched, without its content (and without ingress tokens)."""
+    op = req.get("op")
+    if op == "ws.send":
+        msg = req.get("msg")
+        if not isinstance(msg, dict):
+            return ""
+        kind = str(msg.get("type"))
+        if kind == "call_service":
+            return f"{kind} {msg.get('domain')}.{msg.get('service')}"
+        if kind == "supervisor/api":
+            return f"{kind} {msg.get('method', 'get')} {msg.get('endpoint')}"
+        return kind
+    if op == "http":
+        path = _INGRESS_TOKEN_RE.sub("/api/hassio_ingress/…", str(req.get("path", "")))
+        return f"{req.get('method')} {path.split('?', 1)[0]}"
+    if op in FILE_OPS:
+        return str(req.get("path"))
+    return ""
+
+
 async def _dispatch(op: object, req: dict, conn: _Conn) -> object:
     if op == "ws.open":
         return await conn.sessions.open()
     if op == "ws.send":
-        return await conn.sessions.send(req["session"], req["msg"])
+        forwarded = await conn.sessions.send(req["session"], req["msg"])
+        return None if forwarded else _REFUSED
     if op == "ws.close":
         return await conn.sessions.close(req["session"])
     if op == "http":

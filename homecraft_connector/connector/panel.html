@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="cs">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Homecraft Connector</title>
+<style>
+:root {
+  color-scheme: light dark;
+  --bg: #f6f7f9; --card: #fff; --text: #1c1f24; --muted: #687080; --line: #e3e6eb;
+  --accent: #2f6fed; --ok: #1e8e4e; --warn: #c27c0e; --bad: #c8372d;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #111317; --card: #1b1e24; --text: #e8eaee; --muted: #9aa2b1; --line: #2c313a;
+    --accent: #6a9bff; --ok: #4cc27f; --warn: #e8a93a; --bad: #f06b61;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text);
+  font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+main { max-width: 900px; margin: 0 auto; padding: 20px 16px 40px; display: grid; gap: 16px; }
+h1 { font-size: 22px; margin: 4px 0 0; }
+h2 { font-size: 16px; margin: 0 0 10px; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.muted { color: var(--muted); }
+.badge { display: inline-block; padding: 2px 10px; border-radius: 999px; font-weight: 600; font-size: 13px; }
+.on { background: color-mix(in srgb, var(--ok) 18%, transparent); color: var(--ok); }
+.off { background: color-mix(in srgb, var(--bad) 18%, transparent); color: var(--bad); }
+.paused { background: color-mix(in srgb, var(--warn) 20%, transparent); color: var(--warn); }
+dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; margin: 10px 0; }
+dt { color: var(--muted); }
+dd { margin: 0; overflow-wrap: anywhere; }
+button { font: inherit; border-radius: 8px; border: 1px solid var(--line); background: var(--card);
+  color: var(--text); padding: 6px 14px; cursor: pointer; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.danger { color: var(--bad); }
+input[type=password] { font: inherit; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--line);
+  background: var(--bg); color: var(--text); flex: 1 1 260px; min-width: 0; }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px;
+  background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px;
+  overflow-wrap: anywhere; display: inline-block; max-width: 100%; }
+.switch { display: flex; gap: 10px; align-items: center; font-weight: 600; cursor: pointer; }
+.switch input { width: 20px; height: 20px; accent-color: var(--warn); }
+.msg { min-height: 1.2em; font-size: 13px; }
+.msg.err { color: var(--bad); }
+.scroll { overflow: auto; max-height: 480px; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+thead th { position: sticky; top: 0; background: var(--card); }
+th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+td.target { white-space: normal; overflow-wrap: anywhere; font-family: ui-monospace, Menlo, monospace; }
+td.ok { color: var(--ok); } td.bad { color: var(--bad); } td.warn { color: var(--warn); }
+[hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Homecraft Connector</h1>
+    <div class="muted">Verze <span id="version">–</span></div>
+  </header>
+
+  <section class="card">
+    <h2>Spojení</h2>
+    <div class="row">
+      <span id="conn" class="badge off">Odpojeno</span>
+      <span id="pausedBadge" class="badge paused" hidden>Pozastaveno</span>
+      <button id="reconnect">Připojit znovu</button>
+    </div>
+    <dl>
+      <dt>Server</dt><dd id="server">–</dd>
+      <dt>Poslední spojení</dt><dd id="lastConnected">–</dd>
+      <dt>Poslední chyba</dt><dd id="lastError">–</dd>
+    </dl>
+    <div id="connMsg" class="msg"></div>
+  </section>
+
+  <section class="card">
+    <h2>Pozastavení</h2>
+    <label class="switch"><input type="checkbox" id="paused"> Pozastavit Homecraft</label>
+    <p class="muted">Při pozastavení doplněk odmítne každý požadavek z Homecraftu (chyba „paused“).
+      Spojení zůstává, nastavení přežije restart doplňku.</p>
+    <div id="pauseMsg" class="msg"></div>
+  </section>
+
+  <section class="card">
+    <h2>Párovací kód</h2>
+    <div class="row"><code id="code">–</code><button id="copy">Kopírovat</button></div>
+    <p class="muted">Vlož ho v Homecraftu: projekt → připojení HA → Homecraft Connector.</p>
+  </section>
+
+  <section class="card">
+    <h2>Přístupový token Homecraftu</h2>
+    <div id="tokenSet" hidden>
+      <div class="row"><span class="badge on">Token nastaven ✓</span>
+        <button id="tokenChange">Změnit</button>
+        <button id="tokenDelete" class="danger">Smazat</button></div>
+    </div>
+    <form id="tokenForm" hidden autocomplete="off">
+      <div class="row">
+        <input type="password" id="token" placeholder="client_id:client_secret" autocomplete="off" spellcheck="false">
+        <button class="primary" type="submit">Uložit</button>
+        <button type="button" id="tokenCancel" hidden>Zrušit</button>
+      </div>
+      <p class="muted">Token se jen ukládá, panel ani nastavení doplňku ho už nikdy nezobrazí.</p>
+    </form>
+    <div id="tokenMsg" class="msg"></div>
+  </section>
+
+  <section class="card">
+    <h2>Audit posledních operací</h2>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Čas</th><th>Operace</th><th>Cíl</th><th>Výsledek</th><th>Trvání</th></tr></thead>
+        <tbody id="audit"></tbody>
+      </table>
+    </div>
+    <p id="auditEmpty" class="muted">Zatím žádné operace.</p>
+  </section>
+</main>
+<script>
+"use strict";
+// Relative URLs: under ingress the panel lives below /api/hassio_ingress/<token>/.
+const $ = (id) => document.getElementById(id);
+let editingToken = false;
+
+async function call(method, path, body) {
+  const opts = { method, headers: { "X-Homecraft-Panel": "1" } };
+  if (body !== undefined) {
+    opts.headers["Content-Type"] = "application/json";
+    opts.body = JSON.stringify(body);
+  }
+  const r = await fetch(path, opts);
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error || "HTTP " + r.status);
+  return data;
+}
+
+function show(id, text, isError) {
+  $(id).textContent = text || "";
+  $(id).className = "msg" + (isError ? " err" : "");
+}
+
+function fmtTime(ts) {
+  return ts ? new Date(ts * 1000).toLocaleString("cs-CZ") : "–";
+}
+
+async function refreshStatus() {
+  const s = await call("GET", "api/status");
+  $("version").textContent = s.version;
+  $("conn").textContent = s.connected ? "Připojeno" : "Odpojeno";
+  $("conn").className = "badge " + (s.connected ? "on" : "off");
+  $("pausedBadge").hidden = !s.paused;
+  $("server").textContent = s.server_url;
+  $("lastConnected").textContent = fmtTime(s.last_connected);
+  $("lastError").textContent = s.last_error || "–";
+  $("code").textContent = s.pairing_code;
+  if (document.activeElement !== $("paused")) $("paused").checked = s.paused;
+  $("tokenSet").hidden = !s.token_set || editingToken;
+  $("tokenForm").hidden = s.token_set && !editingToken;
+  $("tokenCancel").hidden = !s.token_set;
+}
+
+const RESULT = { paused: ["Pozastaveno", "warn"], not_allowed: ["Nepovoleno", "bad"] };
+
+async function refreshAudit() {
+  const rows = await call("GET", "api/audit");
+  const body = $("audit");
+  body.replaceChildren(...rows.map((e) => {
+    const tr = document.createElement("tr");
+    const [label, cls] = e.ok ? ["OK", "ok"] : RESULT[e.code] || ["Chyba: " + e.code, "bad"];
+    const cells = [
+      [fmtTime(e.ts)], [e.op], [e.target, "target"], [label, cls],
+      [e.ms == null ? "" : Math.round(e.ms) + " ms"],
+    ];
+    for (const [text, c] of cells) {
+      const td = document.createElement("td");
+      td.textContent = text;
+      if (c) td.className = c;
+      tr.append(td);
+    }
+    return tr;
+  }));
+  $("auditEmpty").hidden = rows.length > 0;
+}
+
+async function refresh() {
+  try {
+    await Promise.all([refreshStatus(), refreshAudit()]);
+  } catch (e) {
+    show("connMsg", "Panel se nepodařilo načíst: " + e.message, true);
+  }
+}
+
+$("reconnect").onclick = async () => {
+  try {
+    await call("POST", "api/reconnect");
+    show("connMsg", "Připojuji…");
+    setTimeout(refresh, 1500);
+  } catch (e) { show("connMsg", e.message, true); }
+};
+
+$("paused").onchange = async (ev) => {
+  try {
+    await call("POST", "api/pause", { paused: ev.target.checked });
+    show("pauseMsg", ev.target.checked ? "Homecraft je pozastaven." : "Homecraft znovu smí provádět operace.");
+  } catch (e) {
+    ev.target.checked = !ev.target.checked;
+    show("pauseMsg", e.message, true);
+  }
+  refresh();
+};
+
+$("copy").onclick = async () => {
+  const code = $("code").textContent;
+  try {
+    await navigator.clipboard.writeText(code);
+  } catch {
+    // The ingress iframe may lack clipboard permission: select the code instead.
+    const range = document.createRange();
+    range.selectNodeContents($("code"));
+    getSelection().removeAllRanges();
+    getSelection().addRange(range);
+    document.execCommand("copy");
+  }
+  $("copy").textContent = "Zkopírováno";
+  setTimeout(() => { $("copy").textContent = "Kopírovat"; }, 1500);
+};
+
+$("tokenForm").onsubmit = async (ev) => {
+  ev.preventDefault();
+  const input = $("token");
+  try {
+    await call("POST", "api/access-token", { token: input.value });
+    input.value = "";
+    editingToken = false;
+    show("tokenMsg", "Token uložen, připojuji…");
+  } catch (e) { show("tokenMsg", e.message, true); }
+  refresh();
+};
+
+$("tokenChange").onclick = () => { editingToken = true; show("tokenMsg", ""); refresh(); };
+$("tokenCancel").onclick = () => { editingToken = false; $("token").value = ""; refresh(); };
+$("tokenDelete").onclick = async () => {
+  if (!confirm("Smazat přístupový token? Doplněk se pak k Homecraftu nepřipojí.")) return;
+  try {
+    await call("DELETE", "api/access-token");
+    show("tokenMsg", "Token smazán.");
+  } catch (e) { show("tokenMsg", e.message, true); }
+  refresh();
+};
+
+refresh();
+setInterval(refresh, 5000);
+</script>
+</body>
+</html>

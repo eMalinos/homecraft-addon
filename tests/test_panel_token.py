@@ -1,0 +1,47 @@
+"""The Access token is write-only: saved and cleared in the panel, never shown."""
+
+from connector import access_token, panel
+
+CSRF = {panel.CSRF_HEADER: "1"}
+SECRET = "s3cr3t-value-0123456789abcdef"
+TOKEN = f"client-id.access:{SECRET}"
+
+
+def test_save_status_delete(run_panel, agent):
+    async def scenario(http):
+        bodies = []
+        saved = await http.post("/api/access-token", json={"token": TOKEN}, headers=CSRF)
+        bodies.append(await saved.text())
+        for path in ("/", "/api/status", "/api/audit"):
+            bodies.append(await (await http.get(path)).text())
+        status = await (await http.get("/api/status")).json()
+        deleted = await http.delete("/api/access-token", headers=CSRF)
+        after = await (await http.get("/api/status")).json()
+        return saved.status, bodies, status, deleted.status, after
+
+    saved, bodies, status, deleted, after = run_panel(scenario)
+    assert saved == 200 and status["token_set"] is True
+    assert agent._wake.is_set()  # saving reconnects at once
+    assert not any(SECRET in b or "client-id.access" in b for b in bodies)
+    assert deleted == 200 and after["token_set"] is False
+    assert access_token.load() is None
+
+
+def test_bad_token_is_refused_without_echo(run_panel):
+    async def scenario(http):
+        resp = await http.post("/api/access-token", json={"token": SECRET}, headers=CSRF)
+        typed = await http.post("/api/access-token", json={"token": 5}, headers=CSRF)
+        return resp.status, await resp.text(), typed.status
+
+    status, body, typed = run_panel(scenario)
+    assert status == 400 and SECRET not in body and typed == 400
+    assert access_token.load() is None
+
+
+def test_change_replaces_the_token(run_panel):
+    async def scenario(http):
+        await http.post("/api/access-token", json={"token": "a:old"}, headers=CSRF)
+        await http.post("/api/access-token", json={"token": "b:new"}, headers=CSRF)
+
+    run_panel(scenario)
+    assert access_token.load() == ("b", "new")

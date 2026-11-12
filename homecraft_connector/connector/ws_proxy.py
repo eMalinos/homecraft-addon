@@ -91,8 +91,8 @@ class Sessions:
             self._open.pop(sid, None)
             await ws.close()
 
-    async def send(self, sid: str, msg: object) -> None:
-        """Forward an allowed command; refuse any other as HA would answer it."""
+    async def send(self, sid: str, msg: object) -> bool:
+        """Forward an allowed command (True); refuse any other as HA would answer it."""
         entry = self._open.get(sid)
         if entry is None:
             raise policy.OpError("unknown_session", "")
@@ -105,8 +105,9 @@ class Sessions:
                 f"{kind} is not allowed by Homecraft Connector",
             )
             await self._push({"op": "ws.msg", "session": sid, "msg": error})
-            return
+            return False
         await entry[0].send_json(msg)
+        return True
 
     async def close(self, sid: str) -> None:
         entry = self._open.pop(sid, None)
