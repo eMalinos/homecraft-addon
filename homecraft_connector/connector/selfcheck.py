@@ -3,7 +3,9 @@
 Read-only. Verifies the spec's assumptions on a real HA OS (*To verify first*);
 the result goes into the issue by hand."""
 
+import contextlib
 import logging
+from collections.abc import AsyncIterator
 
 import aiohttp
 
@@ -24,28 +26,46 @@ def _log(name: str, status: str, detail: str = "") -> None:
     logger.info("self-check %-40s %s%s", name, status, f" ({detail})" if detail else "")
 
 
+class CoreAuthError(Exception):
+    """Core refused SUPERVISOR_TOKEN; the message is HA's reply type."""
+
+
+@contextlib.asynccontextmanager
+async def core_ws(session: aiohttp.ClientSession) -> AsyncIterator[aiohttp.ClientWebSocketResponse]:
+    """Core's WebSocket, authenticated with SUPERVISOR_TOKEN."""
+    async with session.ws_connect(
+        settings.CORE_WS_URL, timeout=aiohttp.ClientWSTimeout(ws_close=10)
+    ) as ws:
+        await ws.receive_json(timeout=10)  # auth_required
+        await ws.send_json({"type": "auth", "access_token": settings.SUPERVISOR_TOKEN})
+        auth = await ws.receive_json(timeout=10)
+        if auth.get("type") != "auth_ok":
+            raise CoreAuthError(auth.get("type", "?"))
+        yield ws
+
+
+async def command(ws: aiohttp.ClientWebSocketResponse, i: int, cmd: dict) -> dict:
+    """Send `cmd` with id `i`; HA's reply to it (other messages are skipped)."""
+    await ws.send_json({"id": i, **cmd})
+    while (reply := await ws.receive_json(timeout=10)).get("id") != i:
+        pass
+    return reply
+
+
 async def _check_ws(session: aiohttp.ClientSession) -> None:
     commands = WS_COMMANDS  # `supervisor/api` goes to the Supervisor (http check)
     try:
-        async with session.ws_connect(
-            settings.CORE_WS_URL, timeout=aiohttp.ClientWSTimeout(ws_close=10)
-        ) as ws:
-            await ws.receive_json(timeout=10)  # auth_required
-            await ws.send_json({"type": "auth", "access_token": settings.SUPERVISOR_TOKEN})
-            auth = await ws.receive_json(timeout=10)
-            if auth.get("type") != "auth_ok":
-                _log("ws auth", "FAIL", auth.get("type", "?"))
-                return
+        async with core_ws(session) as ws:
             _log("ws auth", "OK")
             for i, cmd in enumerate(commands, start=1):
-                await ws.send_json({"id": i, **cmd})
-                while (reply := await ws.receive_json(timeout=10)).get("id") != i:
-                    pass
+                reply = await command(ws, i, cmd)
                 name = "ws " + cmd["type"] + (f" {cmd['endpoint']}" if "endpoint" in cmd else "")
                 if reply.get("success"):
                     _log(name, "OK")
                 else:
                     _log(name, "FAIL", (reply.get("error") or {}).get("code", "?"))
+    except CoreAuthError as e:
+        _log("ws auth", "FAIL", str(e))
     except (TimeoutError, aiohttp.ClientError, OSError, TypeError, ValueError) as e:
         _log("ws " + settings.CORE_WS_URL, "FAIL", type(e).__name__)
 

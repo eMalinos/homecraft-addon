@@ -1,4 +1,4 @@
-"""The add-on panel behind HA ingress (#556): state, pairing code, Access token,
+"""The add-on panel behind HA ingress (#556): state, verification and pairing code, Access token,
 pause and the audit.
 
 Only the Supervisor's ingress proxy may talk to it (HA add-on docs: allow
@@ -47,6 +47,7 @@ SECURITY_HEADERS = {
 
 CLIENT = web.AppKey("client", Client)
 PAIRING_CODE = web.AppKey("pairing_code", str)
+VERIFICATION_CODE = web.AppKey("verification_code", str)
 
 
 @web.middleware
@@ -80,6 +81,8 @@ async def _status(request: web.Request) -> web.Response:
             "last_error": client.last_error,
             "last_connected": client.last_connected,
             "pairing_code": request.app[PAIRING_CODE],
+            "verification_code": request.app[VERIFICATION_CODE],
+            "pending_approval": client.pending_approval,
             "token_set": access_token.active() is not None,
             "token_pending": access_token.pending(),  # pushed by Homecraft, not yet through Access
             "token_updated_at": access_token.updated_by_homecraft(),
@@ -153,11 +156,12 @@ async def _reconnect(request: web.Request) -> web.Response:
     return web.json_response({"ok": True})
 
 
-def make_app(client: Client, pairing_code: str) -> web.Application:
+def make_app(client: Client, pairing_code: str, verification_code: str) -> web.Application:
     app = web.Application(middlewares=[_guard], client_max_size=16 * 1024)
     app.on_response_prepare.append(_security_headers)
     app[CLIENT] = client
     app[PAIRING_CODE] = pairing_code
+    app[VERIFICATION_CODE] = verification_code
     app.router.add_get("/", _page)
     app.router.add_get("/api/status", _status)
     app.router.add_get("/api/audit", _audit)
@@ -170,10 +174,10 @@ def make_app(client: Client, pairing_code: str) -> web.Application:
     return app
 
 
-async def start(client: Client, pairing_code: str) -> web.AppRunner:
+async def start(client: Client, pairing_code: str, verification_code: str) -> web.AppRunner:
     # All interfaces: the ingress proxy reaches the add-on on the hassio network
     # (no host port is published); _guard turns away anyone but the proxy.
-    runner = web.AppRunner(make_app(client, pairing_code), access_log=None)
+    runner = web.AppRunner(make_app(client, pairing_code, verification_code), access_log=None)
     await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", PORT).start()
     return runner

@@ -32,7 +32,7 @@ def run_panel(agent, monkeypatch):
             monkeypatch.setattr(panel, "INGRESS_PROXY", "127.0.0.1")
 
         async def go():
-            async with TestClient(TestServer(panel.make_app(agent, "CODE"))) as http:
+            async with TestClient(TestServer(panel.make_app(agent, "CODE", "ABC-DEF"))) as http:
                 return await scenario(http)
 
         return asyncio.run(go())

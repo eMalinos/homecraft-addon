@@ -28,7 +28,15 @@ profile homecraft_connector flags=(attach_disconnected,mediate_deleted,complain)
   # Access to options.json and other files within the add-on
   /data/** rw,
 
-  # The agent (Dockerfile CMD; python3 -> python3.12) runs in its own profile.
+  # run.sh (Dockerfile CMD) reads HA's install uuid for the pairing request's
+  # fingerprint and passes it to the agent in HA_INSTALL_UUID; the agent itself
+  # never reads .storage (denied in its profile below). `file,` above already
+  # covers this read: the line documents intent until this profile is
+  # narrowed (#561).
+  /run.sh rix,
+  /homeassistant/.storage/core.uuid r,
+
+  # The agent (run.sh execs python3 -> python3.12) runs in its own profile.
   /usr/local/bin/python3.12 cx -> connector,
 
   profile connector flags=(attach_disconnected,mediate_deleted,complain) {

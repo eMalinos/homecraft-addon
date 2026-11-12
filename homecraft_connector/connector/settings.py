@@ -20,6 +20,9 @@ SUPERVISOR_URL = os.environ.get("SUPERVISOR_URL", "http://supervisor")
 # HA core directly (ingress needs it): on HA OS the `homeassistant` hostname.
 HA_URL = os.environ.get("HA_URL", "http://homeassistant:8123")
 CONFIG_ROOT = Path(os.environ.get("CONFIG_ROOT", "/homeassistant"))
+# `data.uuid` of .storage/core.uuid, read by run.sh (the agent's own AppArmor
+# profile denies .storage); "" when unknown.
+HA_INSTALL_UUID = os.environ.get("HA_INSTALL_UUID", "").strip()
 
 
 def options() -> dict:

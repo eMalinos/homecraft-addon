@@ -35,6 +35,8 @@ def test_page_and_status(run_panel):
     assert "default-src 'none'" in headers["Content-Security-Policy"]
     assert headers["Cache-Control"] == "no-store"
     assert status["pairing_code"] == "CODE"
+    assert status["verification_code"] == "ABC-DEF" and status["pending_approval"] is False
+    assert 'id="verification"' in html and "Čeká na schválení v Homecraftu" in html
     assert status["connected"] is False and status["paused"] is False
     assert status["token_set"] is False
 
@@ -76,15 +78,15 @@ def test_pause_switch_persists(run_panel, agent):
 
 
 def test_reconnect_skips_the_wait(run_panel, agent):
-    agent.backoff.next(refused=True)
-    agent.backoff.next(refused=True)
+    agent.backoff.next("refused")
+    agent.backoff.next("refused")
 
     async def scenario(http):
         return (await http.post("/api/reconnect", headers=CSRF)).status
 
     assert run_panel(scenario) == 200
     assert agent._wake.is_set()
-    assert agent.backoff.next(refused=True) == 60  # started over
+    assert agent.backoff.next("refused") == 60  # started over
 
 
 def test_wrong_nonce_is_refused_with_security_headers(run_panel):

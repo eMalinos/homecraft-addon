@@ -7,7 +7,7 @@ import random
 import re
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
 import aiohttp
@@ -18,6 +18,15 @@ from . import access_token, audit, files, http_proxy, identity, policy, ws_proxy
 logger = logging.getLogger(__name__)
 
 CLOSE_UNAUTHORIZED = 4401
+# Unpaired, the pairing request waits for the operator in Homecraft. Retry soon,
+# so an approval takes effect at once; the backend keeps the request 15 min and
+# every connection renews it.
+CLOSE_PENDING = 4403
+PENDING_DELAY = (10, 30)
+# Pending this long: a steady PENDING_SLOW, still well within the 15 min the
+# backend keeps a request after it last saw us, so an approval still lands soon.
+PENDING_LIFETIME = 15 * 60
+PENDING_SLOW = 60
 STABLE_AFTER = 60.0  # seconds connected before the backoff starts over
 MAX_MSG_SIZE = 16 * 1024 * 1024
 # What we send: the backend (uvicorn) closes the connection over 16 MiB.
@@ -35,17 +44,39 @@ REFUSED_DELAYS = (60, 5 * 60, 15 * 60, 60 * 60)
 ROTATE_AFTER = 15 * 60
 
 
+# How a connection attempt ended; picks the reconnect delay.
+OUTAGE, REFUSED, PENDING = "outage", "refused", "pending"
+
+
 class Backoff:
-    """Reconnect delays: an outage 1, 2, 4 … 60 s; a refusal 1, 5, 15, 60 min, then hourly."""
+    """Reconnect delays: an outage 1, 2, 4 … 60 s; a refusal 1, 5, 15, 60 min, then
+    hourly; waiting for approval 10 s, then every 30 s, every 60 s after PENDING_LIFETIME.
+
+    The pending phase (its clock and cadence) survives outages and `reset`; only
+    `end_pending` (hello accepted, or 4401) ends it."""
 
     def __init__(self) -> None:
         self.reset()
+        self.end_pending()
 
     def reset(self) -> None:
         self._outages = self._refusals = 0
 
-    def next(self, refused: bool) -> float:
-        if refused:
+    def end_pending(self) -> None:
+        self._pending = 0
+        self._pending_since: float | None = None
+
+    def next(self, kind: str) -> float:
+        if kind == PENDING:
+            now = time.monotonic()
+            if self._pending_since is None:  # just entered: start at the first delay
+                self._pending_since = now
+            if now - self._pending_since >= PENDING_LIFETIME:
+                return PENDING_SLOW
+            delay = PENDING_DELAY[min(self._pending, len(PENDING_DELAY) - 1)]
+            self._pending += 1
+            return delay
+        if kind == REFUSED:
             delay = REFUSED_DELAYS[min(self._refusals, len(REFUSED_DELAYS) - 1)]
             self._refusals += 1
         else:
@@ -68,16 +99,25 @@ class Client:
         key: Ed25519PrivateKey,
         version: str,
         paused: bool = False,
+        hello_extra: Callable[[], Awaitable[dict]] | None = None,
     ) -> None:
         self.server_url = server_url
         self.agent_id, self.key, self.version = agent_id, key, version
         self.paused = paused
+        # ha_name and fingerprints for a pairing request (fingerprint.Collector):
+        # asked before every attempt, it looks up only what is still missing.
+        self.hello_extra = hello_extra
+        self._extra: dict = {}
         self.backoff = Backoff()
         self._wake = asyncio.Event()
         # For the panel: never a token or a payload in last_error.
         self.connected = False
         self.last_error: str | None = None
         self.last_connected: float | None = None  # unix time hello was accepted
+        self.pending_approval = False  # the last attempt ended with CLOSE_PENDING
+        # A hello was accepted (and not rolled back by a refusing close): the
+        # agent is paired, the pairing-request lookups are no longer needed.
+        self._paired = False
         self._ws: aiohttp.ClientWebSocketResponse | None = None
         self._conn: _Conn | None = None
         self._dropping = False
@@ -119,6 +159,8 @@ class Client:
     def _accepted(self) -> None:
         if not self.connected:
             self.connected, self.last_connected, self.last_error = True, time.time(), None
+            self.pending_approval = False
+            self._paired = True
 
     async def wait(self, delay: float) -> None:
         """Sleep `delay` (+ up to 10 % jitter) unless `reconnect_now` cuts it short."""
@@ -137,27 +179,35 @@ class Client:
         ):
             while True:
                 try:
-                    refused = await self._connect_once(homecraft, ha)
+                    outcome = await self._connect_once(homecraft, ha)
                 except Exception:
                     # Never die silently: an unexpected error counts as an outage.
                     logger.exception("Neočekávaná chyba spojení")
-                    refused = False
-                await self.wait(self.backoff.next(refused))
+                    outcome = OUTAGE
+                    self.pending_approval = False
+                await self.wait(self.backoff.next(outcome))
 
     async def _connect_once(
         self, session: aiohttp.ClientSession, ha: aiohttp.ClientSession | None = None
-    ) -> bool:
-        """One connection until it drops. True when Homecraft refused us.
+    ) -> str:
+        """One connection until it drops: OUTAGE, REFUSED or PENDING.
 
         A staged token is tried first; when Access refuses it, the active one
         right away in the same attempt (the staged one stays for next time)."""
-        self._reconnect_requested = False
+        if self.hello_extra is not None and not self._paired:
+            self._extra = await self.hello_extra()
+        self._reconnect_requested = False  # after the lookups: a request meanwhile counts
         token, staged = access_token.load()
         try:
-            return await self._connect_with(session, ha or session, token, staged)
+            outcome = await self._connect_with(session, ha or session, token, staged)
         except _StagedRefused:
             self._staged_refused(token)
-        return await self._connect_with(session, ha or session, access_token.active(), False)
+            outcome = await self._connect_with(session, ha or session, access_token.active(), False)
+        # Only while the backend is seeing the request (it closes with 4403).
+        self.pending_approval = outcome == PENDING
+        if self._paired:
+            self.backoff.end_pending()
+        return outcome
 
     async def _connect_with(
         self,
@@ -165,11 +215,14 @@ class Client:
         ha: aiohttp.ClientSession,
         token: access_token.Token | None,
         staged: bool,
-    ) -> bool:
+    ) -> str:
         headers = (
             {"CF-Access-Client-Id": token[0], "CF-Access-Client-Secret": token[1]} if token else {}
         )
         started = None
+        # What _accepted() changes: a refusing close (4401/4403) after the
+        # 3 s heuristic counted the hello as accepted puts it back.
+        before = (self.last_connected, self.last_error, self.pending_approval)
         self._dropping = False
         try:
             async with session.ws_connect(
@@ -191,23 +244,32 @@ class Client:
                 if staged:
                     raise _StagedRefused() from None
                 return self._failed(
-                    True, "Chybí nebo neplatí přístupový token — zadej ho v panelu add-onu"
+                    REFUSED, "Chybí nebo neplatí přístupový token — zadej ho v panelu add-onu"
                 )
-            return self._failed(False, f"Homecraft odmítl spojení (HTTP {e.status})")
+            return self._failed(OUTAGE, f"Homecraft odmítl spojení (HTTP {e.status})")
         except (TimeoutError, aiohttp.ClientError, OSError) as e:
-            return self._failed(False, f"Homecraft nedostupný: {type(e).__name__}")
+            return self._failed(OUTAGE, f"Homecraft nedostupný: {type(e).__name__}")
         finally:
             self.connected, self._ws = False, None
             if started is not None and time.monotonic() - started >= STABLE_AFTER:
                 self.backoff.reset()
+        if code in (CLOSE_PENDING, CLOSE_UNAUTHORIZED):
+            self.last_connected, self.last_error, self.pending_approval = before
+            self._paired = False  # not (or no longer) paired: look up what is missing
+        if code == CLOSE_PENDING:
+            if not self.pending_approval:  # logged once, not on every retry
+                logger.info("Čeká na schválení v Homecraftu — porovnej ověřovací kód")
+            self.last_error = "Čeká na schválení v Homecraftu — porovnej ověřovací kód"
+            return PENDING
         if code == CLOSE_UNAUTHORIZED:
-            return self._failed(True, "Agent není spárovaný — vlož párovací kód v Homecraftu")
+            self.backoff.end_pending()
+            return self._failed(REFUSED, "Agent není spárovaný — vlož párovací kód v Homecraftu")
         if self._dropping:
             logger.info("Spojení s Homecraftem ukončeno, připojuji se znovu")
-            return False
+            return OUTAGE
         logger.info("Spojení s Homecraftem skončilo (kód %s)", code)
         self.last_error = f"Spojení skončilo (kód {code})"
-        return False
+        return OUTAGE
 
     async def _commit_token(self, token: access_token.Token) -> bool:
         """Access let the staged `token` through: it becomes the active one,
@@ -250,10 +312,10 @@ class Client:
             conn.request_rotation()
         return {"id": rid, "ok": True, "result": None}
 
-    def _failed(self, refused: bool, message: str) -> bool:
+    def _failed(self, outcome: str, message: str) -> str:
         logger.warning("%s", message)
         self.last_error = message
-        return refused
+        return outcome
 
     async def _serve(
         self, ws: aiohttp.ClientWebSocketResponse, http: aiohttp.ClientSession, fp: str | None
@@ -297,7 +359,7 @@ class Client:
         )
         self._conn = conn
         sessions = conn.sessions
-        accept = loop.call_later(HELLO_ACCEPTED_AFTER, self._accepted)
+        accept: asyncio.TimerHandle | None = None  # started once the hello is out
 
         async def respond(request: dict) -> None:
             reply = await self._reply(request, conn)
@@ -335,9 +397,13 @@ class Client:
                             "agent_id": str(self.agent_id),
                             "version": self.version,
                             "sig": sig,
+                            "public_key": identity.public_b64(self.key),
+                            **self._extra,
                             **({"access_token_fp": fp} if fp else {}),
                         }
                     )
+                    if accept is None:
+                        accept = loop.call_later(HELLO_ACCEPTED_AFTER, self._accepted)
                 elif "id" in data:
                     self._accepted()  # requests come only after an accepted hello
                     if data.get("op") in ("ws.send", "ws.close", "access_token.set"):
@@ -349,7 +415,8 @@ class Client:
                         task.add_done_callback(tasks.discard)
                         task.add_done_callback(maybe_rotate)
         finally:
-            accept.cancel()
+            if accept is not None:
+                accept.cancel()
             if deadline is not None:
                 deadline.cancel()
             self._conn = None

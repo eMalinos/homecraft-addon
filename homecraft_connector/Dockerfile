@@ -16,5 +16,7 @@ COPY requirements.txt .
 RUN pip3 install --no-cache-dir -r requirements.txt
 
 COPY connector ./connector
+COPY run.sh /run.sh
 
-CMD ["python3", "-m", "connector"]
+# run.sh reads HA's install uuid, then execs python3 -m connector.
+CMD ["/run.sh"]

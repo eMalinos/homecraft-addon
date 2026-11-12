@@ -2,7 +2,7 @@ import asyncio
 import logging
 import sys
 
-from . import audit, identity, panel, selfcheck, settings, state
+from . import audit, fingerprint, identity, panel, selfcheck, settings, state
 from .client import Client
 
 logger = logging.getLogger("connector")
@@ -25,13 +25,17 @@ async def main() -> None:
     code = identity.pairing_code(agent_id, key)
     logger.info("Homecraft Connector %s, agent %s", settings.version(), agent_id)
     logger.info("Párovací kód: %s", code)
+    verification = identity.verification_code(key)
+    logger.info("Ověřovací kód: %s", verification)
     audit.load()
     # The option can only switch the pause on; the panel's switch is the rest.
     paused = opts["paused"] or state.load_paused()
     if paused:
         logger.info("Homecraft je pozastaven")
-    client = Client(server_url, agent_id, key, settings.version(), paused)
-    await panel.start(client, code)
+    # The panel first (the verification code at once); the fingerprints are
+    # looked up before each connection attempt until all are found.
+    client = Client(server_url, agent_id, key, settings.version(), paused, fingerprint.Collector())
+    await panel.start(client, code, verification)
     try:
         await selfcheck.run()
     except Exception:
