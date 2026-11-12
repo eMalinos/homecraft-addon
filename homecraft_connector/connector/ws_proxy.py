@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 MAX_SESSIONS = 8
 MAX_MSG_SIZE = 16 * 1024 * 1024
 AUTH_TIMEOUT = 10
+SUPERVISOR_TIMEOUT = 10  # HA core's default for `supervisor/api`
 
 Push = Callable[[dict], Awaitable[None]]
 
@@ -122,6 +123,10 @@ class Sessions:
             )
             await self._push({"op": "ws.msg", "session": sid, "msg": error})
             return "not_allowed"
+        if msg["type"] == "supervisor/api":
+            reply = await self._supervisor(msg)
+            await self._push({"op": "ws.msg", "session": sid, "msg": reply})
+            return None
         if msg["type"] == "lovelace/config/save" and (what := await self._dashboard_refused(msg)):
             e = content.refused(f"lovelace/config/save {msg.get('url_path')}", what)
             logger.info("Odmítnuto: %s", e.message)
@@ -130,6 +135,35 @@ class Sessions:
             return e.code
         await entry[0].send_json(msg)
         return None
+
+    async def _supervisor(self, msg: dict) -> dict:
+        """`supervisor/api` straight to the Supervisor, answered as HA core
+        answers it: the Supervisor's proxy to core refuses `supervisor/*`
+        from add-ons (`unauthorized`). `/ingress/session` it creates for
+        core only, so that one still fails."""
+        if not settings.SUPERVISOR_URL:
+            return ha_error(msg.get("id"), "unsupported", "no Supervisor")
+        timeout = msg.get("timeout", SUPERVISOR_TIMEOUT)
+        try:
+            async with self._http.request(
+                str(msg.get("method") or "get").upper(),
+                settings.SUPERVISOR_URL + msg["endpoint"],
+                json=msg.get("data"),
+                headers={"Authorization": f"Bearer {settings.SUPERVISOR_TOKEN}"},
+                timeout=aiohttp.ClientTimeout(total=timeout),
+            ) as r:
+                body = await r.json(content_type=None)
+        except (TimeoutError, aiohttp.ClientError, OSError, ValueError) as e:
+            return ha_error(msg.get("id"), "unknown_error", type(e).__name__)
+        if not isinstance(body, dict) or body.get("result") != "ok":
+            message = body.get("message") if isinstance(body, dict) else None
+            return ha_error(msg.get("id"), "unknown_error", str(message or "error")[:500])
+        return {
+            "id": msg.get("id"),
+            "type": "result",
+            "success": True,
+            "result": body.get("data", {}),
+        }
 
     async def _dashboard_refused(self, msg: dict) -> str | None:
         """Forbidden actions the saved config brings in that the dashboard in

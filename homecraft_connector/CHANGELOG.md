@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.1
+
+- Dotazy na Supervisor (`supervisor/api`: stav, instalace a spuštění doplňků)
+  jdou z doplňku rovnou na Supervisor. Supervisor je doplňkům přes WebSocket
+  jádra HA nepouští (`unauthorized`). Homecraft dostane odpověď ve stejném
+  tvaru jako dřív.
+- Relaci ingressu (`/ingress/session`) Supervisor vytvoří jen jádru HA, přes
+  Connector proto ingress do doplňků zatím nefunguje.
+
 ## 0.6.0
 
 - Vlastní AppArmor profil (`apparmor.txt`): jádro HA OS pustí agenta jen
