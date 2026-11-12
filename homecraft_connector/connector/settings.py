@@ -3,7 +3,6 @@ them for the dev run next to HA Container, where there is no Supervisor."""
 
 import json
 import os
-import re
 from pathlib import Path
 
 # CONNECTOR_DEV=1 allows a ws:// server without Cloudflare Access (and the panel
@@ -19,8 +18,6 @@ SUPERVISOR_URL = os.environ.get("SUPERVISOR_URL", "http://supervisor")
 # HA core directly (ingress needs it): on HA OS the `homeassistant` hostname.
 HA_URL = os.environ.get("HA_URL", "http://homeassistant:8123")
 CONFIG_ROOT = Path(os.environ.get("CONFIG_ROOT", "/homeassistant"))
-
-_CONFIG_YAML = Path(__file__).resolve().parent.parent / "config.yaml"
 
 
 def options() -> dict:
@@ -38,9 +35,5 @@ def options() -> dict:
 
 
 def version() -> str:
-    """The add-on version from config.yaml (no YAML parser for one line)."""
-    try:
-        m = re.search(r'^version:\s*"?([^"\s]+)', _CONFIG_YAML.read_text(), re.M)
-    except FileNotFoundError:
-        m = None
-    return m.group(1) if m else "dev"
+    """The add-on version, baked in at build time (BUILD_VERSION from the builder)."""
+    return os.environ.get("CONNECTOR_VERSION") or "dev"

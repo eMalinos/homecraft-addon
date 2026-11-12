@@ -36,7 +36,9 @@ async def _check_ws(session: aiohttp.ClientSession) -> None:
     else:
         _log("ws supervisor/api", "unsupported", "bez Supervisoru")
     try:
-        async with session.ws_connect(settings.CORE_WS_URL, timeout=TIMEOUT) as ws:
+        async with session.ws_connect(
+            settings.CORE_WS_URL, timeout=aiohttp.ClientWSTimeout(ws_close=10)
+        ) as ws:
             await ws.receive_json(timeout=10)  # auth_required
             await ws.send_json({"type": "auth", "access_token": settings.SUPERVISOR_TOKEN})
             auth = await ws.receive_json(timeout=10)
@@ -62,7 +64,7 @@ async def _check_http(
 ) -> None:
     headers = {"Authorization": f"Bearer {settings.SUPERVISOR_TOKEN}"} if token else {}
     try:
-        async with session.get(url, headers=headers, timeout=TIMEOUT) as resp:
+        async with session.get(url, headers=headers) as resp:
             status = resp.status
     except (TimeoutError, aiohttp.ClientError, OSError) as e:
         _log(name, "FAIL", type(e).__name__)
@@ -71,7 +73,8 @@ async def _check_http(
 
 
 async def run() -> None:
-    async with aiohttp.ClientSession() as session:
+    # The session timeout bounds every request, the WebSocket handshake included.
+    async with aiohttp.ClientSession(timeout=TIMEOUT) as session:
         await _check_ws(session)
         if settings.SUPERVISOR_URL:
             # Listing the store needs hassio_role manager.

@@ -39,7 +39,6 @@ jobs:
           container-registry-password: ${{ secrets.GITHUB_TOKEN }}
           image: ghcr.io/emalinos/homecraft-connector-${{ matrix.arch }}
           image-tags: ${{ steps.version.outputs.version }}
-          cache-image-tag: ${{ steps.version.outputs.version }}
           push: "true"
           skip-existing: ${{ steps.version.outputs.version }}
           version: ${{ steps.version.outputs.version }}

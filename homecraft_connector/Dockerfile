@@ -1,5 +1,5 @@
-# BUILD_ARCH comes from home-assistant/builder (amd64 | aarch64); a plain
-# `docker build` (dev compose) gets the host's default below.
+# BUILD_ARCH and BUILD_VERSION come from home-assistant/builder; dev compose
+# passes BUILD_ARCH itself, a plain `docker build` gets amd64.
 ARG BUILD_ARCH=amd64
 FROM ghcr.io/home-assistant/${BUILD_ARCH}-base-python:3.12-alpine3.22-2026.10.3
 
@@ -7,12 +7,14 @@ FROM ghcr.io/home-assistant/${BUILD_ARCH}-base-python:3.12-alpine3.22-2026.10.3
 # (set by the Supervisor) and no dev overrides.
 ENV S6_KEEP_ENV=1
 
+# The version the agent reports in its hello.
+ARG BUILD_VERSION=dev
+ENV CONNECTOR_VERSION=$BUILD_VERSION
+
 WORKDIR /app
 COPY requirements.txt .
 RUN pip3 install --no-cache-dir -r requirements.txt
 
-# config.yaml carries the version the agent reports in its hello.
-COPY config.yaml .
 COPY connector ./connector
 
 CMD ["python3", "-m", "connector"]

@@ -4,27 +4,27 @@ Kept in /data/cf_access.json (0600), never in the options (their YAML view
 shows values) and never logged. Only `load` hands it out, to the client."""
 
 import json
-import os
 
 from . import settings
+from .files import write_private
 
 
 def _path():
     return settings.DATA_DIR / "cf_access.json"
 
 
+def _visible_ascii(text: str) -> bool:
+    return all(33 <= ord(c) <= 126 for c in text)
+
+
 def save(token: str) -> None:
-    """ValueError unless the token is `<client_id>:<client_secret>`, both non-empty."""
-    client_id, sep, secret = token.strip().partition(":")
-    if not (sep and client_id and secret):
+    """ValueError unless the token is `<client_id>:<client_secret>`, both non-empty
+    visible ASCII (they become HTTP header values)."""
+    client_id, sep, secret = token.partition(":")
+    client_id, secret = client_id.strip(), secret.strip()
+    if not (sep and client_id and secret and _visible_ascii(client_id + secret)):
         raise ValueError("expected <client_id>:<client_secret>")
-    path = _path()
-    tmp = path.with_suffix(".tmp")
-    tmp.unlink(missing_ok=True)  # a leftover could carry looser permissions
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    with os.fdopen(fd, "w") as f:
-        json.dump({"client_id": client_id, "client_secret": secret}, f)
-    os.replace(tmp, path)
+    write_private(_path(), json.dumps({"client_id": client_id, "client_secret": secret}).encode())
 
 
 def load() -> tuple[str, str] | None:

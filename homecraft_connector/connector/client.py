@@ -44,6 +44,12 @@ class Backoff:
         return delay
 
 
+def access_refused(e: aiohttp.WSServerHandshakeError) -> bool:
+    """Cloudflare Access without a valid token: 401/403, or a redirect to its
+    login page (aiohttp's ws_connect follows redirects, so that ends in 200 HTML)."""
+    return bool(e.history) or e.status in (200, 401, 403) or 300 <= e.status < 400
+
+
 class Client:
     def __init__(
         self,
@@ -75,7 +81,12 @@ class Client:
     async def run(self) -> None:
         async with aiohttp.ClientSession() as session:
             while True:
-                refused = await self._connect_once(session)
+                try:
+                    refused = await self._connect_once(session)
+                except Exception:
+                    # Never die silently: an unexpected error counts as an outage.
+                    logger.exception("Neočekávaná chyba spojení")
+                    refused = False
                 await self.wait(self.backoff.next(refused))
 
     async def _connect_once(self, session: aiohttp.ClientSession) -> bool:
@@ -94,7 +105,7 @@ class Client:
                 await self._serve(ws)
                 code = ws.close_code
         except aiohttp.WSServerHandshakeError as e:
-            if e.status in (401, 403):
+            if access_refused(e):
                 logger.warning("Chybí nebo neplatí přístupový token — zadej ho v panelu add-onu")
                 return True
             logger.warning("Homecraft odmítl spojení (HTTP %s)", e.status)

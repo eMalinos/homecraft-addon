@@ -4,36 +4,45 @@ Homecraft keeps only the public key (from the pairing code); the private key
 never leaves /data/agent_key (0600) and is never logged."""
 
 import base64
+import logging
 import os
 import uuid
-from pathlib import Path
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 from . import settings
+from .files import write_private
+
+logger = logging.getLogger(__name__)
 
 
-def _write_new(path: Path, data: bytes, mode: int) -> None:
-    tmp = path.with_suffix(".tmp")
-    tmp.unlink(missing_ok=True)
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
-    with os.fdopen(fd, "wb") as f:
-        f.write(data)
-    os.replace(tmp, path)
+def _create() -> tuple[uuid.UUID, Ed25519PrivateKey]:
+    raw = os.urandom(32)
+    agent_id = uuid.uuid4()
+    # The key first: an id without its key would be useless after a crash.
+    write_private(settings.DATA_DIR / "agent_key", raw)
+    write_private(settings.DATA_DIR / "agent_id", str(agent_id).encode())
+    return agent_id, Ed25519PrivateKey.from_private_bytes(raw)
 
 
 def load_or_create() -> tuple[uuid.UUID, Ed25519PrivateKey]:
     id_path = settings.DATA_DIR / "agent_id"
     key_path = settings.DATA_DIR / "agent_key"
-    # The key first: an id without its key would be useless after a crash.
     if not key_path.exists():
-        _write_new(key_path, os.urandom(32), 0o600)
-        id_path.unlink(missing_ok=True)  # a new key is a new agent
-    if not id_path.exists():
-        _write_new(id_path, str(uuid.uuid4()).encode(), 0o644)
-    key = Ed25519PrivateKey.from_private_bytes(key_path.read_bytes())
-    return uuid.UUID(id_path.read_text().strip()), key
+        return _create()  # a new key is a new agent, whatever agent_id says
+    try:
+        raw = key_path.read_bytes()
+        if len(raw) != 32:
+            raise ValueError("key is not 32 bytes")
+        agent_id = uuid.UUID(id_path.read_text().strip())
+    except (OSError, ValueError) as e:
+        logger.warning(
+            "Identita agenta je poškozená (%s), vytvářím novou — je potřeba znovu spárovat",
+            e,
+        )
+        return _create()
+    return agent_id, Ed25519PrivateKey.from_private_bytes(raw)
 
 
 def public_raw(key: Ed25519PrivateKey) -> bytes:

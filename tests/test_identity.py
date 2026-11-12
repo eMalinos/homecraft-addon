@@ -52,5 +52,18 @@ def test_hello_signature_verifies_like_the_hub():
     )
 
 
-def test_version_from_config_yaml():
+def test_corrupt_identity_is_regenerated(data_dir):
+    agent_id, _ = identity.load_or_create()
+    (data_dir / "agent_key").write_bytes(b"short")
+    new_id, key = identity.load_or_create()
+    assert new_id != agent_id
+    assert len((data_dir / "agent_key").read_bytes()) == 32
+    (data_dir / "agent_id").write_text("not-a-uuid")
+    assert identity.load_or_create()[0] not in (agent_id, new_id)
+
+
+def test_version_from_build(monkeypatch):
+    monkeypatch.setenv("CONNECTOR_VERSION", "0.1.0")
     assert settings.version() == "0.1.0"
+    monkeypatch.delenv("CONNECTOR_VERSION")
+    assert settings.version() == "dev"

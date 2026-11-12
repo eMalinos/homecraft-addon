@@ -17,7 +17,10 @@ async def main() -> None:
     agent_id, key = identity.load_or_create()
     logger.info("Homecraft Connector %s, agent %s", settings.version(), agent_id)
     logger.info("Párovací kód: %s", identity.pairing_code(agent_id, key))
-    await selfcheck.run()
+    try:
+        await selfcheck.run()
+    except Exception:
+        logger.exception("self-check selhal, pokračuji bez něj")
     await Client(server_url, agent_id, key, settings.version(), opts["paused"]).run()
 
 

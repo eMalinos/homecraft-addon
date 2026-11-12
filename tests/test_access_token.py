@@ -15,7 +15,15 @@ def test_save_load_clear(data_dir):
     access_token.clear()  # clearing twice is fine
 
 
-@pytest.mark.parametrize("token", ["", "noseparator", ":secret", "id:", " : "])
+def test_parts_are_stripped():
+    access_token.save(" abc.access : secret\n")
+    assert access_token.load() == ("abc.access", "secret")
+
+
+@pytest.mark.parametrize(
+    "token",
+    ["", "noseparator", ":secret", "id:", " : ", "id:sec\r\nX-Evil: 1", "id:sé", "i d:secret"],
+)
 def test_invalid_format(token, data_dir):
     with pytest.raises(ValueError):
         access_token.save(token)
