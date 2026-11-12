@@ -131,6 +131,26 @@ a nastavení je nerozšíří. Je to denylist: díru zužuje, nezavírá (viz li
   smazat ani vynulovat. Nová proměnná `${…}` (go2rtc ji doplní z prostředí)
   se odmítne.
 
+**AppArmor** (druhá vrstva pod allowlistem): vlastní profil `apparmor.txt`
+omezuje agenta i v případě chyby v allowlistu nebo v kódu doplňku. Agent běží
+ve vlastním podprofilu a jádro HA OS mu dovolí jen:
+
+- Python a jeho knihovny, kód doplňku (`/app`) jen ke čtení;
+- `/data` (identita, token, stav, audit, `options.json`);
+- `configuration.yaml` ke čtení a `packages/`, `custom_templates/`, `themes/`
+  ke čtení i zápisu;
+- síť (Homecraft, Supervisor, Home Assistant) a certifikáty a DNS v `/etc`.
+
+Odepřeno je vše ostatní, hlavně spuštění shellu nebo jiného programu, zápis do
+`custom_components/` a jinam do `/homeassistant`, čtení i zápis `secrets.yaml`
+a `.storage/`. Spouštěcí skripty S6 mají pravidla podle příkladu
+v dokumentaci Home Assistantu. Do vyladění na živém HA OS je profil v režimu
+`complain` (porušení jen zapisuje do logu).
+
+*Pro vývoj:* každá nová funkce, která sahá na nové cesty nebo spouští nový
+program, musí ve stejném PR upravit `apparmor.txt` a ověřit ho na HA OS
+(`journalctl _TRANSPORT=audit` bez `DENIED`/`ALLOWED` pro tento profil).
+
 **Známé limity** (uzavře až úroveň 3, podepsané balíčky):
 
 - Uzel Node-RED `function` spouští JavaScript; jeho `vm` není hranice.
