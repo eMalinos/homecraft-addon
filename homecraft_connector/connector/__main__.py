@@ -11,8 +11,15 @@ logger = logging.getLogger("connector")
 async def main() -> None:
     opts = settings.options()
     server_url = opts["server_url"]
-    if not server_url.startswith("wss://") and not settings.DEV:
-        logger.error("server_url musí začínat wss:// (ws:// jen s CONNECTOR_DEV=1)")
+    if settings.lan_ws(server_url):
+        logger.warning(
+            "Spojení s Homecraftem není šifrované (ws:// na adresu v LAN): jen pro test, "
+            "přístupový token jde po síti nešifrovaně"
+        )
+    elif not server_url.startswith("wss://") and not settings.DEV:
+        logger.error(
+            "server_url musí začínat wss:// (ws:// jen na privátní IP v LAN nebo s CONNECTOR_DEV=1)"
+        )
         sys.exit(1)
     agent_id, key = identity.load_or_create()
     code = identity.pairing_code(agent_id, key)
