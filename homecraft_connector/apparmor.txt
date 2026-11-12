@@ -1,0 +1,78 @@
+#include <tunables/global>
+
+# Second line of defence under the allowlist (connector/policy.py): even code
+# running inside the agent cannot start a shell or touch HA files outside
+# packages/, custom_templates/ and themes/.
+# The Supervisor renames the top-level profile to the add-on's full slug
+# (<repo hash>_homecraft_connector). Every new feature that touches new paths
+# or programs must extend this file (DOCS.md, Bezpečnost).
+# TODO(#561): drop `complain` once the live run shows no ALLOWED entries.
+profile homecraft_connector flags=(attach_disconnected,mediate_deleted,complain) {
+  #include <abstractions/base>
+
+  # Capabilities
+  file,
+  signal (send) set=(kill,term,int,hup,cont),
+
+  # S6-Overlay
+  /init ix,
+  /bin/** ix,
+  /usr/bin/** ix,
+  /run/{s6,s6-rc*,service}/** ix,
+  /package/** ix,
+  /command/** ix,
+  /etc/s6-overlay/** rwix,
+  /run/{,**} rwk,
+  /dev/tty rw,
+
+  # Access to options.json and other files within the add-on
+  /data/** rw,
+
+  # The agent (Dockerfile CMD; python3 -> python3.12) runs in its own profile.
+  /usr/local/bin/python3* cx -> connector,
+
+  profile connector flags=(attach_disconnected,mediate_deleted,complain) {
+    #include <abstractions/base>
+
+    # Receive signals from S6-Overlay
+    signal (receive) peer=*_homecraft_connector,
+
+    # Network: Homecraft (WSS), supervisor, homeassistant:8123, ingress panel
+    network inet stream,
+    network inet6 stream,
+    network inet dgram,
+    network inet6 dgram,
+
+    # Python (base-python image) and the agent code (Dockerfile WORKDIR /app)
+    /usr/local/bin/python3* mr,
+    /usr/local/lib/** mr,
+    /usr/lib/** mr,
+    /app/** r,
+    deny /app/** w,  # silences __pycache__ writes, Python carries on without them
+
+    # TLS and name resolution
+    /etc/ssl/** r,
+    /usr/share/ca-certificates/** r,
+    /etc/resolv.conf r,
+    /etc/hosts r,
+    /etc/services r,
+    /etc/protocols r,
+
+    # Agent key and id, cf_access{,.pending}.json, state.json, audit.jsonl,
+    # options.json and their *.tmp files
+    /data/{,**} rw,
+
+    # HA config: configuration.yaml read-only, three directories rw with
+    # *.hfb-tmp files renamed over the target (connector/files.py)
+    /homeassistant/ r,
+    /homeassistant/configuration.yaml r,
+    /homeassistant/{packages,custom_templates,themes}/{,**} rw,
+
+    # Explicit denies win over any allow rule, in complain mode too.
+    deny /homeassistant/**secrets.yaml rw,
+    deny /homeassistant/.storage/{,**} rw,
+    deny /homeassistant/custom_components/{,**} w,
+    # No shell and no other program: nothing in this profile may exec.
+    deny /** x,
+  }
+}

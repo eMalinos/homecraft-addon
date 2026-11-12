@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.0
+
+- Vlastní AppArmor profil (`apparmor.txt`): jádro HA OS pustí agenta jen
+  k Pythonu, `/data`, `configuration.yaml` (čtení) a složkám `packages/`,
+  `custom_templates/` a `themes/`. Shell ani jiný program spustit nesmí,
+  `secrets.yaml` a `.storage/` nepřečte. Hodnocení zabezpečení doplňku +1.
+- Zatím v režimu `complain` (porušení se jen zapisují do logu); po vyladění
+  na živém HA OS ho další verze přepne do vynucování.
+
 ## 0.5.1
 
 - `server_url` smí být `ws://` na privátní IP v LAN (vývojový Homecraft bez
