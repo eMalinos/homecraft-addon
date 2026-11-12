@@ -1,4 +1,5 @@
 import os
+import stat
 from pathlib import Path
 
 from . import policy, settings
@@ -19,7 +20,8 @@ def write_private(path: Path, data: bytes) -> None:
 # --- file.* operations under HA's config directory (#555) -------------------
 
 TMP_SUFFIX = ".hfb-tmp"
-MAX_READ = 12 * 1024 * 1024  # the reply must fit a 16 MiB frame, JSON escaping included
+# Bounds memory; JSON escaping can still grow it, so client.send checks the frame.
+MAX_READ = 9 * 1024 * 1024
 
 
 def _target(op: str, path: object) -> Path:
@@ -52,8 +54,22 @@ def write(path: str, text: str) -> None:
     target = _target("write", path)
     target.parent.mkdir(parents=True, exist_ok=True)
     tmp = target.with_name(target.name + TMP_SUFFIX)
-    tmp.write_text(text, encoding="utf-8")
-    os.replace(tmp, target)
+    try:
+        st = tmp.lstat()
+    except FileNotFoundError:
+        pass
+    else:  # a stale tmp (or a planted link): remove the entry itself, never follow it
+        if stat.S_ISDIR(st.st_mode):
+            raise policy.OpError("conflict", f"{tmp.name} is a directory")
+        tmp.unlink()
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+        os.replace(tmp, target)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 def delete(path: str) -> None:

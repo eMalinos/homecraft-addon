@@ -51,6 +51,23 @@ def test_symlink_out_of_root(root, tmp_path):
     assert not (outside / "x.yaml").exists()
 
 
+def test_stale_tmp_link_is_replaced_not_followed(root, tmp_path):
+    outside = tmp_path / "outside.yaml"
+    outside.write_text("keep\n")
+    (root / "packages" / "x.yaml.hfb-tmp").symlink_to(outside)
+    files.write("packages/x.yaml", "new\n")
+    assert outside.read_text() == "keep\n"
+    assert (root / "packages" / "x.yaml").read_text() == "new\n"
+    assert not (root / "packages" / "x.yaml").is_symlink()
+    assert files.list_dir("packages") == ["x.yaml"]
+
+
+def test_failed_write_leaves_no_tmp(root):
+    with pytest.raises(UnicodeEncodeError):
+        files.write("packages/x.yaml", "\ud800")
+    assert files.list_dir("packages") == []
+
+
 def test_symlink_inside_root_to_other_dir(root):
     (root / "custom_components").mkdir()
     (root / "packages" / "cc").symlink_to(root / "custom_components")

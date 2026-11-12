@@ -6,6 +6,7 @@ import logging
 import random
 import time
 import uuid
+from dataclasses import dataclass, field
 
 import aiohttp
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -17,6 +18,9 @@ logger = logging.getLogger(__name__)
 CLOSE_UNAUTHORIZED = 4401
 STABLE_AFTER = 60.0  # seconds connected before the backoff starts over
 MAX_MSG_SIZE = 16 * 1024 * 1024
+# What we send: the backend (uvicorn) closes the connection over 16 MiB.
+MAX_FRAME = 15 * 1024 * 1024
+MAX_CONCURRENT_OPS = 4  # http and file.* at once; ws.* are not limited
 
 # Not paired (4401) or no valid Access token (403): retrying every minute
 # forever would only knock on a closed door, so slow down to once an hour.
@@ -126,14 +130,33 @@ class Client:
         lock = asyncio.Lock()
 
         async def send(data: dict) -> None:
+            text = json.dumps(data)  # ASCII: len == bytes
+            if len(text) > MAX_FRAME:
+                smaller = _oversized(data)
+                if smaller is None:
+                    logger.warning("Zpráva přes limit rámce zahozena")
+                    return
+                text = json.dumps(smaller)
             async with lock:
-                await ws.send_json(data)
+                await ws.send_str(text)
 
-        sessions = ws_proxy.Sessions(http, send)
+        conn = _Conn(ws_proxy.Sessions(http, send), http_proxy.HttpProxy(http))
+        sessions = conn.sessions
         tasks: set[asyncio.Task] = set()
 
         async def respond(request: dict) -> None:
-            await send(await self._reply(request, http, sessions))
+            reply = await self._reply(request, conn)
+            await send(reply)
+            msg = request.get("msg")
+            if request.get("op") == "ws.send" and not reply["ok"] and isinstance(msg, dict):
+                if "id" in msg:  # AgentSocket.recv waits for this id, not for our reply
+                    await send(
+                        {
+                            "op": "ws.msg",
+                            "session": request.get("session"),
+                            "msg": ws_proxy.ha_error(msg["id"], **reply["error"]),
+                        }
+                    )
 
         try:
             async for msg in ws:
@@ -171,14 +194,12 @@ class Client:
                 task.cancel()
             await sessions.close_all()
 
-    async def _reply(
-        self, request: dict, http: aiohttp.ClientSession, sessions: ws_proxy.Sessions
-    ) -> dict:
+    async def _reply(self, request: dict, conn: "_Conn") -> dict:
         rid, op = request["id"], request.get("op")
         if self.paused:
             return _error(rid, "paused", "")
         try:
-            result = await _dispatch(op, request, http, sessions)
+            result = await _dispatch(op, request, conn)
         except policy.OpError as e:
             if e.code == "not_allowed":
                 logger.info("Odmítnuto: %s", e.message)
@@ -192,27 +213,52 @@ class Client:
         return {"id": rid, "ok": True, "result": result}
 
 
-async def _dispatch(
-    op: object, req: dict, http: aiohttp.ClientSession, sessions: ws_proxy.Sessions
-) -> object:
+@dataclass
+class _Conn:
+    """Per Homecraft connection: HA sessions, HTTP state, and a cap on the
+    http/file operations running at once."""
+
+    sessions: ws_proxy.Sessions
+    http: http_proxy.HttpProxy
+    ops: asyncio.Semaphore = field(default_factory=lambda: asyncio.Semaphore(MAX_CONCURRENT_OPS))
+
+
+FILE_OPS = {
+    "file.read": lambda r: (files.read, r["path"]),
+    "file.write": lambda r: (files.write, r["path"], r["text"]),
+    "file.delete": lambda r: (files.delete, r["path"]),
+    "file.list": lambda r: (files.list_dir, r["path"]),
+}
+
+
+async def _dispatch(op: object, req: dict, conn: _Conn) -> object:
     if op == "ws.open":
-        return await sessions.open()
+        return await conn.sessions.open()
     if op == "ws.send":
-        return await sessions.send(req["session"], req["msg"])
+        return await conn.sessions.send(req["session"], req["msg"])
     if op == "ws.close":
-        return await sessions.close(req["session"])
+        return await conn.sessions.close(req["session"])
     if op == "http":
-        return await http_proxy.handle(http, req)
-    if op == "file.read":
-        return await asyncio.to_thread(files.read, req["path"])
-    if op == "file.write":
-        return await asyncio.to_thread(files.write, req["path"], req["text"])
-    if op == "file.delete":
-        return await asyncio.to_thread(files.delete, req["path"])
-    if op == "file.list":
-        return await asyncio.to_thread(files.list_dir, req["path"])
+        async with conn.ops:
+            return await conn.http.handle(req)
+    if op in FILE_OPS:
+        call = FILE_OPS[op](req)
+        async with conn.ops:
+            return await asyncio.to_thread(*call)
     raise policy.OpError("unknown_op", str(op)[:64])
 
 
 def _error(rid: object, code: str, message: str) -> dict:
     return {"id": rid, "ok": False, "error": {"code": code, "message": message}}
+
+
+def _oversized(data: dict) -> dict | None:
+    """What goes out instead of a frame over MAX_FRAME: a reply becomes a
+    `too_large` error, a ws.msg result an HA-shaped one; anything else is dropped."""
+    message = "over the 16 MiB frame limit"
+    if "ok" in data and "id" in data:
+        return _error(data["id"], "too_large", message)
+    msg = data.get("msg")
+    if data.get("op") == "ws.msg" and isinstance(msg, dict) and "id" in msg:
+        return {**data, "msg": ws_proxy.ha_error(msg["id"], "too_large", message)}
+    return None

@@ -22,6 +22,16 @@ AUTH_TIMEOUT = 10
 Push = Callable[[dict], Awaitable[None]]
 
 
+def ha_error(msg_id: object, code: str, message: str) -> dict:
+    """A failed command's result, shaped as HA answers it."""
+    return {
+        "id": msg_id,
+        "type": "result",
+        "success": False,
+        "error": {"code": code, "message": message},
+    }
+
+
 class Sessions:
     """The HA sessions of one Homecraft connection; `close_all` when it drops."""
 
@@ -89,15 +99,11 @@ class Sessions:
         if not policy.ws_allowed(msg):
             kind = msg.get("type") if isinstance(msg, dict) else None
             logger.info("Odmítnuto: ws %s", kind)
-            error = {
-                "id": msg.get("id") if isinstance(msg, dict) else None,
-                "type": "result",
-                "success": False,
-                "error": {
-                    "code": "not_allowed",
-                    "message": f"{kind} is not allowed by Homecraft Connector",
-                },
-            }
+            error = ha_error(
+                msg.get("id") if isinstance(msg, dict) else None,
+                "not_allowed",
+                f"{kind} is not allowed by Homecraft Connector",
+            )
             await self._push({"op": "ws.msg", "session": sid, "msg": error})
             return
         await entry[0].send_json(msg)
