@@ -9,7 +9,7 @@ import aiohttp
 import pytest
 from aiohttp import web
 
-from connector import http_proxy, settings, ws_proxy
+from connector import ha_token, http_proxy, settings, ws_proxy
 from connector.policy import OpError
 
 DASHBOARDS: dict[str, dict] = {}  # url_path -> live config (lovelace/config)
@@ -63,7 +63,13 @@ async def fake_ha(monkeypatch, token="t0k"):
         seen.append({"supervisor": request.match_info["slug"]})
         slug = request.match_info["slug"]
         url = "/api/hassio_ingress/tokNR/" if slug == "a0d7b954_nodered" else None
-        return web.json_response({"data": {"ingress_url": url}})
+        return web.json_response({"result": "ok", "data": {"ingress_url": url}})
+
+    async def store_install(request):  # the Supervisor refuses
+        seen.append(
+            {"install": request.match_info["slug"], "auth": request.headers.get("Authorization")}
+        )
+        return web.json_response({"result": "error", "message": "already installed"}, status=400)
 
     async def ingress(request):
         seen.append(
@@ -78,6 +84,7 @@ async def fake_ha(monkeypatch, token="t0k"):
     app.router.add_post("/api/config/config_entries/flow", flow_start)
     app.router.add_route("*", "/api/config/config_entries/flow/{id}", flow_step)
     app.router.add_get("/addons/{slug}/info", addon_info)
+    app.router.add_post("/store/addons/{slug}/install", store_install)
     app.router.add_route("*", "/api/hassio_ingress/tokNR/{rest:.*}", ingress)
     runner = web.AppRunner(app)
     await runner.setup()
@@ -329,5 +336,78 @@ def test_dashboard_save_with_a_forbidden_action_is_refused(monkeypatch):
             await _until(pushed, 3)
             assert pushed[-1]["msg"] == {"id": 3, "type": "result", "success": True, "result": 1}
             await sessions.close_all()
+
+    asyncio.run(scenario())
+
+
+def test_supervisor_api_goes_to_the_supervisor(monkeypatch):
+    """HA core runs `supervisor/api` for admins only; the add-on asks the
+    Supervisor itself and answers as core would."""
+
+    async def scenario():
+        async with fake_ha(monkeypatch) as (seen, _), aiohttp.ClientSession() as http:
+            monkeypatch.setattr(settings, "SUPERVISOR_URL", settings.HA_URL)
+            pushed: list[dict] = []
+
+            async def push(data):
+                pushed.append(data)
+
+            sessions = ws_proxy.Sessions(http, push)
+            sid = (await sessions.open())["session"]
+            info = {"type": "supervisor/api", "endpoint": "/addons/a0d7b954_nodered/info"}
+            await sessions.send(sid, {"id": 1, **info, "method": "get"})
+            await sessions.send(
+                sid,
+                {
+                    "id": 2,
+                    "type": "supervisor/api",
+                    "endpoint": "/store/addons/a0d7b954_influxdb/install",
+                    "method": "post",
+                    "timeout": None,
+                },
+            )
+            await _until(pushed, 2)
+            replies = {p["msg"]["id"]: p["msg"] for p in pushed}
+            assert replies[1] == {
+                "id": 1,
+                "type": "result",
+                "success": True,
+                "result": {"ingress_url": "/api/hassio_ingress/tokNR/"},
+            }
+            assert replies[2]["success"] is False
+            assert replies[2]["error"] == {"code": "unknown_error", "message": "already installed"}
+            assert {"install": "a0d7b954_influxdb", "auth": "Bearer t0k"} in seen
+            assert not [c for c in seen if c.get("type") == "supervisor/api"]  # core never asked
+
+    asyncio.run(scenario())
+
+
+def test_ingress_session_goes_to_core_as_the_admin(monkeypatch):
+    """The Supervisor creates ingress sessions for core only, and its proxy
+    refuses `supervisor/*` from add-ons: the panel's admin token asks core."""
+
+    async def scenario():
+        async with (
+            fake_ha(monkeypatch, token="admin") as (seen, _),
+            aiohttp.ClientSession() as http,
+        ):
+            monkeypatch.setattr(settings, "SUPERVISOR_URL", settings.HA_URL)
+            monkeypatch.setattr(settings, "SUPERVISOR_TOKEN", "not-admin")
+            pushed: list[dict] = []
+
+            async def push(data):
+                pushed.append(data)
+
+            sessions = ws_proxy.Sessions(http, push)
+            msg = {"type": "supervisor/api", "endpoint": "/ingress/session", "method": "post"}
+            no_token = await sessions._supervisor({"id": 7, **msg})
+            ha_token.save("wrong")
+            wrong = await sessions._supervisor({"id": 8, **msg})
+            ha_token.save("admin")
+            ok = await sessions._supervisor({"id": 9, **msg})
+            assert no_token["error"]["code"] == "no_ha_token"
+            assert wrong["error"]["code"] == "ha_token_invalid"
+            assert ok == {"id": 9, "type": "result", "success": True, "result": 1}
+            assert [c for c in seen if c.get("type") == "supervisor/api"] == [{"id": 1, **msg}]
 
     asyncio.run(scenario())

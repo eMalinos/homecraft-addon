@@ -62,3 +62,33 @@ def test_status_says_when_homecraft_updated_the_token(run_panel):
     assert body["token_set"] is True and body["token_pending"] is False
     assert isinstance(body["token_updated_at"], float)
     assert SECRET not in str([first, staged, body])
+
+
+def test_ha_admin_token_is_write_only(run_panel, data_dir):
+    from connector import ha_token, panel
+
+    csrf = {panel.CSRF_HEADER: panel.NONCE}
+
+    async def scenario(http):
+        bad = await http.post("/api/ha-token", json={"token": "has space"}, headers=csrf)
+        saved = await http.post("/api/ha-token", json={"token": " eyJ.abc.def "}, headers=csrf)
+        status = await (await http.get("/api/status")).json()
+        blind = await http.delete("/api/ha-token")  # no CSRF header
+        cleared = await http.delete("/api/ha-token", headers=csrf)
+        after = await (await http.get("/api/status")).json()
+        return (
+            bad.status,
+            saved.status,
+            await saved.text(),
+            status,
+            blind.status,
+            cleared.status,
+            after,
+        )
+
+    bad, saved, body, status, blind, cleared, after = run_panel(scenario)
+    assert (bad, saved, blind, cleared) == (400, 200, 403, 200)
+    assert "eyJ" not in body and "eyJ" not in str(status)
+    assert status["ha_token_set"] is True and after["ha_token_set"] is False
+    assert ha_token.load() is None
+    assert not (data_dir / "ha_token").exists()

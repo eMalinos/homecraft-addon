@@ -3,8 +3,9 @@ pause and the audit.
 
 Only the Supervisor's ingress proxy may talk to it (HA add-on docs: allow
 172.30.32.2, deny everyone else); CONNECTOR_DEV=1 drops that check for the
-dev run without a Supervisor. The Access token is write-only: no response
-carries it, `GET /api/status` says only `token_set`.
+dev run without a Supervisor. The Access token and the HA admin token are
+write-only: no response carries them, `GET /api/status` says only
+`token_set` / `ha_token_set`.
 
 State-changing requests carry a per-start nonce that only the panel page
 holds. Limit: a script on the same origin (anything else served through HA)
@@ -17,7 +18,7 @@ from pathlib import Path
 
 from aiohttp import web
 
-from . import access_token, audit, settings, state
+from . import access_token, audit, ha_token, settings, state
 from .client import Client
 
 logger = logging.getLogger(__name__)
@@ -82,6 +83,7 @@ async def _status(request: web.Request) -> web.Response:
             "token_set": access_token.active() is not None,
             "token_pending": access_token.pending(),  # pushed by Homecraft, not yet through Access
             "token_updated_at": access_token.updated_by_homecraft(),
+            "ha_token_set": ha_token.load() is not None,
             "paused": client.paused,
         }
     )
@@ -122,6 +124,22 @@ async def _clear_token(request: web.Request) -> web.Response:
     return web.json_response({"ok": True})
 
 
+async def _save_ha_token(request: web.Request) -> web.Response:
+    token = await _json_field(request, "token", str)
+    try:
+        ha_token.save(token)
+    except ValueError:
+        return web.json_response({"ok": False, "error": "Tohle není token HA"}, status=400)
+    logger.info("Token správce HA uložen v panelu")
+    return web.json_response({"ok": True})
+
+
+async def _clear_ha_token(request: web.Request) -> web.Response:
+    ha_token.clear()
+    logger.info("Token správce HA smazán v panelu")
+    return web.json_response({"ok": True})
+
+
 async def _pause(request: web.Request) -> web.Response:
     paused = await _json_field(request, "paused", bool)
     state.save_paused(paused)
@@ -145,6 +163,8 @@ def make_app(client: Client, pairing_code: str) -> web.Application:
     app.router.add_get("/api/audit", _audit)
     app.router.add_post("/api/access-token", _save_token)
     app.router.add_delete("/api/access-token", _clear_token)
+    app.router.add_post("/api/ha-token", _save_ha_token)
+    app.router.add_delete("/api/ha-token", _clear_ha_token)
     app.router.add_post("/api/pause", _pause)
     app.router.add_post("/api/reconnect", _reconnect)
     return app

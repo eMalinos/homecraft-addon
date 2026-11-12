@@ -11,13 +11,15 @@ from collections.abc import Awaitable, Callable
 
 import aiohttp
 
-from . import content, policy, settings
+from . import content, ha_token, policy, settings
 
 logger = logging.getLogger(__name__)
 
 MAX_SESSIONS = 8
 MAX_MSG_SIZE = 16 * 1024 * 1024
 AUTH_TIMEOUT = 10
+SUPERVISOR_TIMEOUT = 10  # HA core's default for `supervisor/api`
+SUPERVISOR_MAX_TIMEOUT = 600  # an add-on install: Homecraft asks for no limit
 
 Push = Callable[[dict], Awaitable[None]]
 
@@ -46,6 +48,7 @@ class Sessions:
         self._on_end = on_end  # a session ended (the client may reconnect once idle)
         self._open: dict[str, tuple[aiohttp.ClientWebSocketResponse, asyncio.Task]] = {}
         self._opening = 0
+        self._calls: set[asyncio.Task] = set()  # `supervisor/api` in flight
 
     @property
     def idle(self) -> bool:
@@ -63,10 +66,13 @@ class Sessions:
         self._open[sid] = (ws, asyncio.create_task(self._pump(sid, ws)))
         return {"session": sid}
 
-    async def _connect(self) -> aiohttp.ClientWebSocketResponse:
+    async def _connect(
+        self, url: str | None = None, token: str | None = None
+    ) -> aiohttp.ClientWebSocketResponse:
+        """Core as the add-on (through the Supervisor), or at `url` with `token`."""
         try:
             ws = await self._http.ws_connect(
-                settings.CORE_WS_URL,
+                url or settings.CORE_WS_URL,
                 max_msg_size=MAX_MSG_SIZE,
                 timeout=aiohttp.ClientWSTimeout(ws_close=AUTH_TIMEOUT),
             )
@@ -74,10 +80,10 @@ class Sessions:
             raise policy.OpError("ha_unreachable", type(e).__name__) from None
         try:
             await ws.receive_json(timeout=AUTH_TIMEOUT)  # auth_required
-            await ws.send_json({"type": "auth", "access_token": settings.SUPERVISOR_TOKEN})
+            await ws.send_json({"type": "auth", "access_token": token or settings.SUPERVISOR_TOKEN})
             auth = await ws.receive_json(timeout=AUTH_TIMEOUT)
             if not isinstance(auth, dict) or auth.get("type") != "auth_ok":
-                raise policy.OpError("auth_failed", "HA refused the add-on's token")
+                raise policy.OpError("auth_failed", "HA refused the token")
         except BaseException as e:
             await ws.close()
             if isinstance(e, (TimeoutError, aiohttp.ClientError, OSError, TypeError, ValueError)):
@@ -122,6 +128,12 @@ class Sessions:
             )
             await self._push({"op": "ws.msg", "session": sid, "msg": error})
             return "not_allowed"
+        if msg["type"] == "supervisor/api":
+            # In a task: ws.send runs inline in the read loop, and an install takes minutes.
+            task = asyncio.create_task(self._supervisor_reply(sid, msg))
+            self._calls.add(task)
+            task.add_done_callback(self._calls.discard)
+            return None
         if msg["type"] == "lovelace/config/save" and (what := await self._dashboard_refused(msg)):
             e = content.refused(f"lovelace/config/save {msg.get('url_path')}", what)
             logger.info("Odmítnuto: %s", e.message)
@@ -130,6 +142,87 @@ class Sessions:
             return e.code
         await entry[0].send_json(msg)
         return None
+
+    async def _supervisor_reply(self, sid: str, msg: dict) -> None:
+        reply = await self._supervisor(msg)
+        if sid in self._open and not self._paused():
+            try:
+                await self._push({"op": "ws.msg", "session": sid, "msg": reply})
+            except (ConnectionError, aiohttp.ClientError, RuntimeError):
+                pass  # Homecraft is gone; its own drop closes every session
+
+    async def _supervisor(self, msg: dict) -> dict:
+        """`supervisor/api` straight to the Supervisor, answered as HA core
+        answers it: the Supervisor's proxy to core refuses `supervisor/*`
+        from add-ons (`unauthorized`). `/ingress/session` the Supervisor
+        creates for core only: that one goes to core as the panel's admin."""
+        if not settings.SUPERVISOR_URL:
+            return ha_error(msg.get("id"), "unsupported", "no Supervisor")
+        if msg["endpoint"] == "/ingress/session":
+            return await self._ingress_session(msg)
+        timeout = msg.get("timeout", SUPERVISOR_TIMEOUT)
+        if not isinstance(timeout, (int, float)) or isinstance(timeout, bool):
+            timeout = SUPERVISOR_MAX_TIMEOUT  # None = no limit in HA; not here
+        timeout = min(max(float(timeout), 1.0), SUPERVISOR_MAX_TIMEOUT)
+        try:
+            async with self._http.request(
+                str(msg.get("method") or "get").upper(),
+                settings.SUPERVISOR_URL + msg["endpoint"],
+                json=msg.get("data"),
+                headers={"Authorization": f"Bearer {settings.SUPERVISOR_TOKEN}"},
+                timeout=aiohttp.ClientTimeout(total=timeout),
+            ) as r:
+                try:
+                    body = await r.json(content_type=None)
+                except ValueError:
+                    return ha_error(msg.get("id"), "unknown_error", f"Supervisor HTTP {r.status}")
+        except (TimeoutError, aiohttp.ClientError, OSError) as e:
+            return ha_error(msg.get("id"), "unknown_error", type(e).__name__)
+        if not isinstance(body, dict) or body.get("result") != "ok":
+            message = body.get("message") if isinstance(body, dict) else None
+            return ha_error(msg.get("id"), "unknown_error", str(message or "error")[:500])
+        return {
+            "id": msg.get("id"),
+            "type": "result",
+            "success": True,
+            "result": body.get("data", {}),
+        }
+
+    async def _ingress_session(self, msg: dict) -> dict:
+        """Core directly (not the Supervisor's proxy, which refuses it), with
+        the admin token from the panel: core binds the session to that user."""
+        token = ha_token.load()
+        if token is None:
+            return ha_error(
+                msg.get("id"),
+                "no_ha_token",
+                "Ingress needs an HA admin token in the Homecraft Connector panel",
+            )
+        url = settings.HA_URL.replace("http", "ws", 1) + "/api/websocket"
+        try:
+            async with asyncio.timeout(3 * AUTH_TIMEOUT):
+                ws = await self._connect(url, token)
+                try:
+                    await ws.send_json(
+                        {
+                            "id": 1,
+                            "type": "supervisor/api",
+                            "endpoint": "/ingress/session",
+                            "method": "post",
+                        }
+                    )
+                    while not (
+                        isinstance(reply := await ws.receive_json(), dict) and reply.get("id") == 1
+                    ):
+                        pass
+                finally:
+                    await ws.close()
+        except policy.OpError as e:
+            code = "ha_token_invalid" if e.code == "auth_failed" else e.code
+            return ha_error(msg.get("id"), code, e.message)
+        except (TimeoutError, aiohttp.ClientError, OSError, TypeError, ValueError) as e:
+            return ha_error(msg.get("id"), "unknown_error", type(e).__name__)
+        return {**reply, "id": msg.get("id")}
 
     async def _dashboard_refused(self, msg: dict) -> str | None:
         """Forbidden actions the saved config brings in that the dashboard in
@@ -162,6 +255,8 @@ class Sessions:
 
     async def close_all(self, notify: bool = False) -> None:
         """`notify`: tell Homecraft (ws.closed), when its connection stays up."""
+        for task in list(self._calls):
+            task.cancel()
         sids = list(self._open)
         for sid in sids:
             await self.close(sid)

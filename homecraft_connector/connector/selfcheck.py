@@ -18,11 +18,6 @@ WS_COMMANDS = [
     {"type": "lovelace/dashboards/list"},
     {"type": "config/label_registry/list"},
 ]
-SUPERVISOR_WS_COMMAND = {
-    "type": "supervisor/api",
-    "endpoint": "/addons/a0d7b954_nodered/info",
-    "method": "get",
-}
 
 
 def _log(name: str, status: str, detail: str = "") -> None:
@@ -30,11 +25,7 @@ def _log(name: str, status: str, detail: str = "") -> None:
 
 
 async def _check_ws(session: aiohttp.ClientSession) -> None:
-    commands = list(WS_COMMANDS)
-    if settings.SUPERVISOR_URL:
-        commands.append(SUPERVISOR_WS_COMMAND)
-    else:
-        _log("ws supervisor/api", "unsupported", "bez Supervisoru")
+    commands = WS_COMMANDS  # `supervisor/api` goes to the Supervisor (http check)
     try:
         async with session.ws_connect(
             settings.CORE_WS_URL, timeout=aiohttp.ClientWSTimeout(ws_close=10)

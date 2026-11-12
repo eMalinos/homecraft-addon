@@ -112,6 +112,25 @@ td.ok { color: var(--ok); } td.bad { color: var(--bad); } td.warn { color: var(-
   </section>
 
   <section class="card">
+    <h2>Token správce Home Assistantu</h2>
+    <p class="muted">Jen pro ingress do doplňků (Node-RED, Grafana, InfluxDB, go2rtc):
+      relaci ingressu vytvoří Home Assistant jen správci. Doplněk ho nikam neposílá
+      a nepoužije na nic jiného. Vytvoř ho v profilu správce → Zabezpečení →
+      Dlouhodobé přístupové tokeny.</p>
+    <div id="haTokenSet" hidden>
+      <div class="row"><span class="badge on">Token nastaven ✓</span>
+        <button id="haTokenDelete" class="danger">Smazat</button></div>
+    </div>
+    <form id="haTokenForm" hidden autocomplete="off">
+      <div class="row">
+        <input type="password" id="haToken" placeholder="dlouhodobý přístupový token" autocomplete="off" spellcheck="false">
+        <button class="primary" type="submit">Uložit</button>
+      </div>
+    </form>
+    <div id="haTokenMsg" class="msg"></div>
+  </section>
+
+  <section class="card">
     <h2>Audit posledních operací</h2>
     <div class="scroll">
       <table>
@@ -167,6 +186,8 @@ async function refreshStatus() {
   $("tokenCancel").hidden = !s.token_set;
   $("tokenUpdated").hidden = !s.token_updated_at;
   $("tokenPending").hidden = !s.token_pending;
+  $("haTokenSet").hidden = !s.ha_token_set;
+  $("haTokenForm").hidden = s.ha_token_set;
   $("tokenUpdated").textContent = "(aktualizován " + fmtTime(s.token_updated_at) + " Homecraftem)";
 }
 
@@ -267,6 +288,23 @@ $("tokenDelete").onclick = async () => {
     await call("DELETE", "api/access-token");
     show("tokenMsg", "Token smazán.");
   } catch (e) { show("tokenMsg", e.message, true); }
+  refresh();
+};
+
+$("haTokenForm").onsubmit = async (ev) => {
+  ev.preventDefault();
+  try {
+    await call("POST", "api/ha-token", { token: $("haToken").value });
+    $("haToken").value = "";
+    show("haTokenMsg", "Token uložen.");
+  } catch (e) { show("haTokenMsg", e.message, true); }
+  refresh();
+};
+$("haTokenDelete").onclick = async () => {
+  try {
+    await call("DELETE", "api/ha-token");
+    show("haTokenMsg", "Token smazán.");
+  } catch (e) { show("haTokenMsg", e.message, true); }
   refresh();
 };
 
