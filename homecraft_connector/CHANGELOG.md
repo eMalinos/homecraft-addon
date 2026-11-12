@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.5.0
+
+- Homecraft může doplňku poslat nový přístupový token (`access_token.set`,
+  rotace tokenu Cloudflare bez obíhání domů). Token se ověří stejně jako
+  v panelu a uloží jako čekající. Doplněk se s ním připojí znovu, až nic
+  neběží (nejpozději za 15 minut), takže nepřeruší rozběhnutý požadavek.
+  Pustí-li ho Cloudflare, platí. Odmítne-li ho, doplněk se v tomtéž pokusu
+  připojí s původním a čekající token zkusí příště znovu.
+- `hello` posílá `access_token_fp` (prvních 16 znaků SHA-256 celého tokenu,
+  nikdy token), aby Homecraft poznal i výměnu samotného secretu.
+- Spojení s Homecraftem bez cookies (cookie od Access nenahradí token).
+- Panel ukazuje, kdy token aktualizoval Homecraft, a čekající token. Token se
+  dál nikde nezobrazuje, nepíše do logu ani do auditu (jen operace a výsledek).
+
 ## 0.4.0
 
 - Kontrola obsahu: doplněk odmítne zápis, který by v Home Assistantu spouštěl

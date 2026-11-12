@@ -40,10 +40,16 @@ class Sessions:
         http: aiohttp.ClientSession,
         push: Push,
         paused: Callable[[], bool] = lambda: False,
+        on_end: Callable[[], None] = lambda: None,
     ) -> None:
         self._http, self._push, self._paused = http, push, paused
+        self._on_end = on_end  # a session ended (the client may reconnect once idle)
         self._open: dict[str, tuple[aiohttp.ClientWebSocketResponse, asyncio.Task]] = {}
         self._opening = 0
+
+    @property
+    def idle(self) -> bool:
+        return not self._open and not self._opening
 
     async def open(self) -> dict:
         if len(self._open) + self._opening >= MAX_SESSIONS:
@@ -97,6 +103,8 @@ class Sessions:
             # Homecraft is gone; its own drop closes every session
             self._open.pop(sid, None)
             await ws.close()
+        finally:
+            self._on_end()
 
     async def send(self, sid: str, msg: object) -> str | None:
         """Forward an allowed command (None); refuse any other as HA would

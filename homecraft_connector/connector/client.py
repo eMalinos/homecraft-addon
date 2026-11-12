@@ -7,6 +7,7 @@ import random
 import re
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 import aiohttp
@@ -29,6 +30,9 @@ HELLO_ACCEPTED_AFTER = 3.0
 # Not paired (4401) or no valid Access token (403): retrying every minute
 # forever would only knock on a closed door, so slow down to once an hour.
 REFUSED_DELAYS = (60, 5 * 60, 15 * 60, 60 * 60)
+# A staged token is tried on a new connection once nothing runs, but no later
+# than this after the push (an HA session can stay open for long).
+ROTATE_AFTER = 15 * 60
 
 
 class Backoff:
@@ -78,18 +82,30 @@ class Client:
         self._conn: _Conn | None = None
         self._dropping = False
         self._closers: set[asyncio.Task] = set()
+        # A connect in flight when reconnect_now came: drop it once it is up.
+        self._reconnect_requested = False
+        # Fingerprint of the staged token Access refused: logged once, and a
+        # repeated push of it does not trigger a reconnect (#565).
+        self._refused_fp: str | None = None
 
     def reconnect_now(self) -> None:
         """Connect again at once (panel: **Připojit znovu**, token saved or deleted):
         skip the current wait, or drop the open connection so the next one uses
-        the current token."""
+        the current token. A handshake still in flight is dropped once it is up."""
         self.backoff.reset()
         self._wake.set()
-        if self._ws is not None and not self._ws.closed:
-            self._dropping = True
-            task = asyncio.get_running_loop().create_task(self._ws.close())
-            self._closers.add(task)
-            task.add_done_callback(self._closers.discard)
+        self._reconnect_requested = True
+        if self._ws is not None:
+            self._drop(self._ws)
+
+    def _drop(self, ws: aiohttp.ClientWebSocketResponse) -> None:
+        """Close `ws` if it is still the current connection."""
+        if ws is not self._ws or ws.closed:
+            return
+        self._dropping = True
+        task = asyncio.get_running_loop().create_task(ws.close())
+        self._closers.add(task)
+        task.add_done_callback(self._closers.discard)
 
     async def set_paused(self, paused: bool) -> None:
         """Pausing also closes every open HA session (Homecraft gets ws.closed)."""
@@ -113,19 +129,43 @@ class Client:
         self._wake.clear()
 
     async def run(self) -> None:
-        async with aiohttp.ClientSession() as session:
+        # Two sessions: Homecraft's has no cookie jar, so a CF_Authorization
+        # cookie from Access never stands in for the token we send (#565).
+        async with (
+            aiohttp.ClientSession(cookie_jar=aiohttp.DummyCookieJar()) as homecraft,
+            aiohttp.ClientSession() as ha,
+        ):
             while True:
                 try:
-                    refused = await self._connect_once(session)
+                    refused = await self._connect_once(homecraft, ha)
                 except Exception:
                     # Never die silently: an unexpected error counts as an outage.
                     logger.exception("Neočekávaná chyba spojení")
                     refused = False
                 await self.wait(self.backoff.next(refused))
 
-    async def _connect_once(self, session: aiohttp.ClientSession) -> bool:
-        """One connection until it drops. True when Homecraft refused us."""
-        token = access_token.load()
+    async def _connect_once(
+        self, session: aiohttp.ClientSession, ha: aiohttp.ClientSession | None = None
+    ) -> bool:
+        """One connection until it drops. True when Homecraft refused us.
+
+        A staged token is tried first; when Access refuses it, the active one
+        right away in the same attempt (the staged one stays for next time)."""
+        self._reconnect_requested = False
+        token, staged = access_token.load()
+        try:
+            return await self._connect_with(session, ha or session, token, staged)
+        except _StagedRefused:
+            self._staged_refused(token)
+        return await self._connect_with(session, ha or session, access_token.active(), False)
+
+    async def _connect_with(
+        self,
+        session: aiohttp.ClientSession,
+        ha: aiohttp.ClientSession,
+        token: access_token.Token | None,
+        staged: bool,
+    ) -> bool:
         headers = (
             {"CF-Access-Client-Id": token[0], "CF-Access-Client-Secret": token[1]} if token else {}
         )
@@ -137,11 +177,19 @@ class Client:
             ) as ws:
                 started = time.monotonic()
                 self._ws = ws
-                logger.info("Připojeno k %s", self.server_url)
-                await self._serve(ws, session)
+                if staged and not await self._commit_token(token):
+                    self._reconnect_requested = True  # its token is no longer on disk
+                if self._reconnect_requested:  # the panel changed the token meanwhile
+                    self._drop(ws)
+                else:
+                    logger.info("Připojeno k %s", self.server_url)
+                    fp = access_token.fingerprint(token) if token else None
+                    await self._serve(ws, ha, fp)
                 code = ws.close_code
         except aiohttp.WSServerHandshakeError as e:
             if access_refused(e):
+                if staged:
+                    raise _StagedRefused() from None
                 return self._failed(
                     True, "Chybí nebo neplatí přístupový token — zadej ho v panelu add-onu"
                 )
@@ -155,11 +203,52 @@ class Client:
         if code == CLOSE_UNAUTHORIZED:
             return self._failed(True, "Agent není spárovaný — vlož párovací kód v Homecraftu")
         if self._dropping:
-            logger.info("Spojení s Homecraftem ukončeno z panelu")
+            logger.info("Spojení s Homecraftem ukončeno, připojuji se znovu")
             return False
         logger.info("Spojení s Homecraftem skončilo (kód %s)", code)
         self.last_error = f"Spojení skončilo (kód {code})"
         return False
+
+    async def _commit_token(self, token: access_token.Token) -> bool:
+        """Access let the staged `token` through: it becomes the active one,
+        unless the panel or a newer push replaced it meanwhile (then False)."""
+        if not await asyncio.to_thread(access_token.commit, token):
+            return False
+        self._refused_fp = None
+        logger.info("Přístupový token aktualizován Homecraftem")
+        audit.record("access_token.commit", "", True)
+        return True
+
+    def _staged_refused(self, token: access_token.Token) -> None:
+        """Logged and audited once per staged token; it stays staged."""
+        fp = access_token.fingerprint(token)
+        if fp != self._refused_fp:
+            self._refused_fp = fp
+            logger.warning("Nový token od Homecraftu odmítnut Cloudflare, používám původní")
+            audit.record("access_token.commit", "", False, "refused")
+
+    async def _set_token(self, rid: object, request: dict, conn: "_Conn") -> dict:
+        """`access_token.set` from Homecraft: staged, never echoed or logged.
+        The connection is replaced once idle (`_Conn.rotate`), at the latest
+        after ROTATE_AFTER, never in the middle of a request."""
+        token = request.get("token")
+        try:
+            if not isinstance(token, str):
+                raise ValueError
+            parsed = access_token.parse(token)
+            changed = await asyncio.to_thread(access_token.stage, token)
+        except ValueError:
+            return _error(rid, "bad_request", "expected <client_id>:<client_secret>")
+        except OSError as e:
+            return _error(rid, "internal", type(e).__name__)
+        fp = access_token.fingerprint(parsed)
+        if changed and fp == self._refused_fp:
+            self._refused_fp = None  # staged anew (e.g. after a panel save): log again
+        # A token this connection already fell back from: wait for the next one
+        # (it tries the staged token first), do not reconnect over and over.
+        if fp != self._refused_fp and access_token.pending():
+            conn.request_rotation()
+        return {"id": rid, "ok": True, "result": None}
 
     def _failed(self, refused: bool, message: str) -> bool:
         logger.warning("%s", message)
@@ -167,7 +256,7 @@ class Client:
         return refused
 
     async def _serve(
-        self, ws: aiohttp.ClientWebSocketResponse, http: aiohttp.ClientSession
+        self, ws: aiohttp.ClientWebSocketResponse, http: aiohttp.ClientSession, fp: str | None
     ) -> None:
         lock = asyncio.Lock()
 
@@ -182,11 +271,33 @@ class Client:
             async with lock:
                 await ws.send_str(text)
 
-        conn = _Conn(ws_proxy.Sessions(http, send, lambda: self.paused), http_proxy.HttpProxy(http))
+        loop = asyncio.get_running_loop()
+        tasks: set[asyncio.Task] = set()
+        rotate = False
+        deadline: asyncio.TimerHandle | None = None
+
+        def maybe_rotate(_: object = None) -> None:
+            """A staged token: reconnect once nothing runs on this connection.
+            Checked when a request or an HA session ends; tied to `ws`, so a
+            late callback never drops a newer connection."""
+            if rotate and not tasks and sessions.idle:
+                self._drop(ws)
+
+        def request_rotation() -> None:
+            nonlocal rotate, deadline
+            rotate = True
+            if deadline is None:
+                deadline = loop.call_later(ROTATE_AFTER, self._drop, ws)
+            maybe_rotate()
+
+        conn = _Conn(
+            ws_proxy.Sessions(http, send, lambda: self.paused, on_end=maybe_rotate),
+            http_proxy.HttpProxy(http),
+            request_rotation,
+        )
         self._conn = conn
         sessions = conn.sessions
-        accept = asyncio.get_running_loop().call_later(HELLO_ACCEPTED_AFTER, self._accepted)
-        tasks: set[asyncio.Task] = set()
+        accept = loop.call_later(HELLO_ACCEPTED_AFTER, self._accepted)
 
         async def respond(request: dict) -> None:
             reply = await self._reply(request, conn)
@@ -224,18 +335,23 @@ class Client:
                             "agent_id": str(self.agent_id),
                             "version": self.version,
                             "sig": sig,
+                            **({"access_token_fp": fp} if fp else {}),
                         }
                     )
                 elif "id" in data:
                     self._accepted()  # requests come only after an accepted hello
-                    if data.get("op") in ("ws.send", "ws.close"):
+                    if data.get("op") in ("ws.send", "ws.close", "access_token.set"):
                         await respond(data)  # inline: a session keeps its message order
+                        maybe_rotate()
                     else:
                         task = asyncio.create_task(respond(data))
                         tasks.add(task)
                         task.add_done_callback(tasks.discard)
+                        task.add_done_callback(maybe_rotate)
         finally:
             accept.cancel()
+            if deadline is not None:
+                deadline.cancel()
             self._conn = None
             for task in list(tasks):
                 task.cancel()
@@ -257,6 +373,10 @@ class Client:
 
     async def _handle(self, request: dict, conn: "_Conn") -> dict:
         rid, op = request["id"], request.get("op")
+        # Before pause and the allowlist: it touches only the connection to
+        # Homecraft, never HA, and a paused home must not lose that at rotation.
+        if op == "access_token.set":
+            return await self._set_token(rid, request, conn)
         if self.paused and op != "ws.close":  # Homecraft may still close its sessions
             return _error(rid, "paused", "")
         try:
@@ -276,6 +396,10 @@ class Client:
         return {"id": rid, "ok": True, "result": result}
 
 
+class _StagedRefused(Exception):
+    """Access refused the staged token: try the active one."""
+
+
 @dataclass
 class _Conn:
     """Per Homecraft connection: HA sessions, HTTP state, and a cap on the
@@ -283,6 +407,7 @@ class _Conn:
 
     sessions: ws_proxy.Sessions
     http: http_proxy.HttpProxy
+    request_rotation: Callable[[], None]  # a token was staged (#565)
     ops: asyncio.Semaphore = field(default_factory=lambda: asyncio.Semaphore(MAX_CONCURRENT_OPS))
 
 
