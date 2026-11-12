@@ -4,6 +4,7 @@ Homecraft keeps only the public key (from the pairing code); the private key
 never leaves /data/agent_key (0600) and is never logged."""
 
 import base64
+import hashlib
 import logging
 import os
 import uuid
@@ -53,6 +54,18 @@ def pairing_code(agent_id: uuid.UUID, key: Ed25519PrivateKey) -> str:
     """base32 (no padding) of agent_id (16 B) + public key (32 B); the backend's
     `decode_pairing_code` reverses it."""
     return base64.b32encode(agent_id.bytes + public_raw(key)).decode().rstrip("=")
+
+
+def public_b64(key: Ed25519PrivateKey) -> str:
+    """The raw public key (32 B), base64: sent in the hello for a pairing request."""
+    return base64.b64encode(public_raw(key)).decode()
+
+
+def verification_code(key: Ed25519PrivateKey) -> str:
+    """`XXX-XXX`: the first 6 base32 characters of sha256(public key). The panel
+    shows it and Homecraft shows the same one next to the pairing request."""
+    c = base64.b32encode(hashlib.sha256(public_raw(key)).digest()).decode()
+    return f"{c[:3]}-{c[3:6]}"
 
 
 def sign_hello(agent_id: uuid.UUID, key: Ed25519PrivateKey, nonce_b64: str) -> str:

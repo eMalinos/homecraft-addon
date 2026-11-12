@@ -51,6 +51,7 @@ thead th { position: sticky; top: 0; background: var(--card); }
 th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
 td.target { white-space: normal; overflow-wrap: anywhere; font-family: ui-monospace, Menlo, monospace; }
 td.ok { color: var(--ok); } td.bad { color: var(--bad); } td.warn { color: var(--warn); }
+.verification { font: 700 32px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: 2px; }
 [hidden] { display: none !important; }
 </style>
 </head>
@@ -86,9 +87,13 @@ td.ok { color: var(--ok); } td.bad { color: var(--bad); } td.warn { color: var(-
   </section>
 
   <section class="card">
+    <h2>Spárování</h2>
+    <div class="row"><span id="verification" class="verification">–</span>
+      <span id="pendingBadge" class="badge paused" hidden>Čeká na schválení v Homecraftu</span></div>
+    <p class="muted">Ověřovací kód: porovnej ho v Homecraftu se žádostí o spárování.</p>
     <h2>Párovací kód</h2>
     <div class="row"><code id="code">–</code><button id="copy">Kopírovat</button></div>
-    <p class="muted">Vlož ho v Homecraftu: projekt → připojení HA → Homecraft Connector.</p>
+    <p class="muted">Záložní cesta: vlož ho v Homecraftu: projekt → připojení HA → Homecraft Connector.</p>
   </section>
 
   <section class="card">
@@ -180,6 +185,8 @@ async function refreshStatus() {
   $("lastConnected").textContent = fmtTime(s.last_connected);
   $("lastError").textContent = s.last_error || "–";
   $("code").textContent = s.pairing_code;
+  $("verification").textContent = s.verification_code;
+  $("pendingBadge").hidden = !s.pending_approval;
   if (document.activeElement !== $("paused")) $("paused").checked = s.paused;
   $("tokenSet").hidden = !s.token_set || editingToken;
   $("tokenForm").hidden = s.token_set && !editingToken;

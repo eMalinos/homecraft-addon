@@ -8,12 +8,20 @@ Cloudflare). Home Assistant nepotřebuje veřejnou adresu, přesměrování port
 1. Spusť doplněk a otevři jeho panel **Homecraft** v postranním menu HA
    (nebo **Otevřít webové rozhraní** u doplňku).
 2. Do **Přístupový token Homecraftu** vlož token, který ti dal Homecraft, a dej **Uložit**.
-3. Párovací kód zkopíruj tlačítkem **Kopírovat** (je i v **Logu** na řádku `Párovací kód: …`).
-4. V Homecraftu otevři projekt → připojení HA → **Homecraft Connector**, vlož kód do **Pairing code** a dej **Pair**.
-5. V panelu dej **Připojit znovu**, ať doplněk nečeká na další pokus.
+3. Nespárovaný doplněk se Homecraftu sám ohlásí jako **žádost o spárování**
+   a panel ukáže odznak **Čeká na schválení v Homecraftu**.
+4. V Homecraftu porovnej **ověřovací kód** u žádosti (tvar `XXX-XXX`) s kódem
+   nahoře v panelu (je i v **Logu** na řádku `Ověřovací kód: …`). Shodují-li se,
+   žádost schval. Doplněk to během desítek sekund zkusí znovu a připojí se.
 
-Kód obsahuje jen identifikátor doplňku a jeho veřejný klíč, žádné tajemství.
+Ověřovací kód je jen otisk veřejného klíče doplňku, žádné tajemství.
 Soukromý klíč zůstává v doplňku (`/data`).
+
+**Záložní cesta** (Homecraft bez žádostí o spárování): párovací kód zkopíruj
+tlačítkem **Kopírovat** (je i v **Logu** na řádku `Párovací kód: …`), v Homecraftu
+otevři projekt → připojení HA → **Homecraft Connector**, vlož kód do
+**Pairing code** a dej **Pair**. Pak v panelu dej **Připojit znovu**. Párovací
+kód obsahuje jen identifikátor doplňku a jeho veřejný klíč.
 
 ## Ingress do doplňků
 
@@ -55,7 +63,8 @@ Panel je dostupný jen přes Home Assistant (ingress), nikde jinde neposlouchá.
   z Homecraftu chybou `paused` (Plan i Apply v Homecraftu skončí chybou)
   a hned zavře všechna otevřená sezení Homecraftu do Home Assistantu. Spojení
   s Homecraftem zůstává. Pauza přežije restart doplňku.
-- **Párovací kód** s tlačítkem **Kopírovat**.
+- **Spárování**: velký ověřovací kód, odznak **Čeká na schválení v Homecraftu**
+  a pod ním párovací kód s tlačítkem **Kopírovat** (záložní cesta).
 - **Přístupový token Homecraftu**: jde jen zadat, změnit a smazat. Po uložení
   panel ukazuje jen „Token nastaven ✓“; token není vidět v panelu, v nastavení
   doplňku ani v jeho YAML a nepíše se do logu. Uložení i smazání tokenu
@@ -144,19 +153,28 @@ a nastavení je nerozšíří. Je to denylist: díru zužuje, nezavírá (viz li
   smazat ani vynulovat. Nová proměnná `${…}` (go2rtc ji doplní z prostředí)
   se odmítne.
 
+**Co doplněk o sobě posílá** (v úvodní zprávě `hello`, aby šla žádost
+o spárování poznat): veřejný klíč, název Home Assistantu (`location_name`,
+nejvýš 64 znaků) a dva otisky, vždy jen prvních 16 hex znaků SHA-256, nikdy
+hodnota sama: `machine_fp` z ID hostitele HA OS (`machine_id` ze Supervisoru
+`/info`) a `ha_fp` z ID instalace Home Assistantu (`.storage/core.uuid`). ID
+instalace není v žádném API, proto doplněk při startu přečte sám tenhle jediný
+soubor z `.storage/` (AppArmor povoluje právě jeho). Hodnoty ani otisky nejdou
+do logu ani do panelu. Co nejde zjistit, doplněk vynechá.
+
 **AppArmor** (druhá vrstva pod allowlistem): vlastní profil `apparmor.txt`
 omezuje agenta i v případě chyby v allowlistu nebo v kódu doplňku. Agent běží
 ve vlastním podprofilu a jádro HA OS mu dovolí jen:
 
 - Python a jeho knihovny, kód doplňku (`/app`) jen ke čtení;
 - `/data` (identita, token, stav, audit, `options.json`);
-- `configuration.yaml` ke čtení a `packages/`, `custom_templates/`, `themes/`
+- `configuration.yaml` a `.storage/core.uuid` ke čtení a `packages/`, `custom_templates/`, `themes/`
   ke čtení i zápisu;
 - síť (Homecraft, Supervisor, Home Assistant) a certifikáty a DNS v `/etc`.
 
 Odepřeno je vše ostatní, hlavně spuštění shellu nebo jiného programu, zápis do
 `custom_components/` a jinam do `/homeassistant`, čtení i zápis `secrets.yaml`
-a `.storage/`. Spouštěcí skripty S6 mají pravidla podle příkladu
+a zbytku `.storage/`. Spouštěcí skripty S6 mají pravidla podle příkladu
 v dokumentaci Home Assistantu. Do vyladění na živém HA OS je profil v režimu
 `complain` (porušení jen zapisuje do logu).
 
@@ -188,5 +206,6 @@ dosah na Home Assistant. Nic nemění.
 - Úplně: zruš spárování v Homecraftu, nebo doplněk odinstaluj (smaže se
   i jeho identita, token a audit v `/data`).
 
-Bez spárování se doplněk připojuje čím dál řidčeji (1, 5, 15, 60 minut, dál
+Dokud žádost čeká na schválení, zkouší to doplněk po 10 s a pak každých 30 s.
+Bez spárování (Homecraft spojení odmítne) se doplněk připojuje čím dál řidčeji (1, 5, 15, 60 minut, dál
 jednou za hodinu), dokud ho znovu nespáruješ nebo neodinstaluješ.

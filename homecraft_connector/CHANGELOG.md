@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.7.0
+
+- Spárování bez kopírování kódu: nespárovaný doplněk se Homecraftu sám ohlásí
+  jako žádost o spárování a panel nahoře ukáže krátký **ověřovací kód**
+  (`XXX-XXX`, i v logu). Operátor ho v Homecraftu porovná a žádost schválí.
+  Dlouhý párovací kód zůstává jako záložní cesta.
+- Úvodní zpráva navíc nese veřejný klíč, název Home Assistantu a otisky
+  hostitele a instalace HA (jen 16 znaků SHA-256, nikdy hodnota sama).
+- Na „čeká na schválení“ (kód 4403) panel ukáže odznak a doplněk to zkouší
+  znovu po 10 s a pak každých 30 s.
+- AppArmor: agent smí číst `.storage/core.uuid` (ID instalace HA pro otisk),
+  zbytek `.storage/` dál ne.
+
 ## 0.6.1
 
 - Dotazy na Supervisor (`supervisor/api`: stav, instalace a spuštění doplňků)

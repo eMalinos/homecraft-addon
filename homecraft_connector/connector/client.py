@@ -18,6 +18,11 @@ from . import access_token, audit, files, http_proxy, identity, policy, ws_proxy
 logger = logging.getLogger(__name__)
 
 CLOSE_UNAUTHORIZED = 4401
+# Unpaired, the pairing request waits for the operator in Homecraft. Retry soon,
+# so an approval takes effect at once; the backend keeps the request 15 min and
+# every connection renews it.
+CLOSE_PENDING = 4403
+PENDING_DELAY = (10, 30)
 STABLE_AFTER = 60.0  # seconds connected before the backoff starts over
 MAX_MSG_SIZE = 16 * 1024 * 1024
 # What we send: the backend (uvicorn) closes the connection over 16 MiB.
@@ -42,7 +47,13 @@ class Backoff:
         self.reset()
 
     def reset(self) -> None:
-        self._outages = self._refusals = 0
+        self._outages = self._refusals = self._pending = 0
+
+    def pending(self) -> float:
+        """Waiting for approval: 10 s, then every 30 s."""
+        delay = PENDING_DELAY[min(self._pending, len(PENDING_DELAY) - 1)]
+        self._pending += 1
+        return delay
 
     def next(self, refused: bool) -> float:
         if refused:
@@ -68,16 +79,21 @@ class Client:
         key: Ed25519PrivateKey,
         version: str,
         paused: bool = False,
+        hello_extra: dict | None = None,
     ) -> None:
         self.server_url = server_url
         self.agent_id, self.key, self.version = agent_id, key, version
         self.paused = paused
+        # ha_name and fingerprints for a pairing request (fingerprint.collect)
+        self.hello_extra = hello_extra or {}
         self.backoff = Backoff()
         self._wake = asyncio.Event()
         # For the panel: never a token or a payload in last_error.
         self.connected = False
         self.last_error: str | None = None
         self.last_connected: float | None = None  # unix time hello was accepted
+        self.pending_approval = False  # closed with CLOSE_PENDING, not yet accepted
+        self._pending_attempt = False  # the last attempt ended with CLOSE_PENDING
         self._ws: aiohttp.ClientWebSocketResponse | None = None
         self._conn: _Conn | None = None
         self._dropping = False
@@ -119,6 +135,7 @@ class Client:
     def _accepted(self) -> None:
         if not self.connected:
             self.connected, self.last_connected, self.last_error = True, time.time(), None
+            self.pending_approval = False
 
     async def wait(self, delay: float) -> None:
         """Sleep `delay` (+ up to 10 % jitter) unless `reconnect_now` cuts it short."""
@@ -142,7 +159,10 @@ class Client:
                     # Never die silently: an unexpected error counts as an outage.
                     logger.exception("Neočekávaná chyba spojení")
                     refused = False
-                await self.wait(self.backoff.next(refused))
+                if self._pending_attempt:
+                    await self.wait(self.backoff.pending())
+                else:
+                    await self.wait(self.backoff.next(refused))
 
     async def _connect_once(
         self, session: aiohttp.ClientSession, ha: aiohttp.ClientSession | None = None
@@ -152,6 +172,7 @@ class Client:
         A staged token is tried first; when Access refuses it, the active one
         right away in the same attempt (the staged one stays for next time)."""
         self._reconnect_requested = False
+        self._pending_attempt = False
         token, staged = access_token.load()
         try:
             return await self._connect_with(session, ha or session, token, staged)
@@ -200,7 +221,14 @@ class Client:
             self.connected, self._ws = False, None
             if started is not None and time.monotonic() - started >= STABLE_AFTER:
                 self.backoff.reset()
+        if code == CLOSE_PENDING:
+            if not self.pending_approval:  # logged once, not on every retry
+                logger.info("Čeká na schválení v Homecraftu — porovnej ověřovací kód")
+            self.pending_approval = self._pending_attempt = True
+            self.last_error = "Čeká na schválení v Homecraftu — porovnej ověřovací kód"
+            return False
         if code == CLOSE_UNAUTHORIZED:
+            self.pending_approval = False
             return self._failed(True, "Agent není spárovaný — vlož párovací kód v Homecraftu")
         if self._dropping:
             logger.info("Spojení s Homecraftem ukončeno, připojuji se znovu")
@@ -335,6 +363,8 @@ class Client:
                             "agent_id": str(self.agent_id),
                             "version": self.version,
                             "sig": sig,
+                            "public_key": identity.public_b64(self.key),
+                            **self.hello_extra,
                             **({"access_token_fp": fp} if fp else {}),
                         }
                     )

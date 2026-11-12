@@ -8,8 +8,10 @@ from aiohttp import web
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from test_ws_proxy import fake_ha
 
-from connector import client
+from connector import client, identity
 from connector.client import Client
+
+HELLOS: list[dict] = []  # every hello `against` received
 
 
 async def against(script, agent=None):
@@ -20,7 +22,8 @@ async def against(script, agent=None):
         ws = web.WebSocketResponse()
         await ws.prepare(request)
         await ws.send_json({"op": "challenge", "nonce": "AAAA"})
-        assert (await ws.receive_json())["op"] == "hello"
+        HELLOS.append(await ws.receive_json())
+        assert HELLOS[-1]["op"] == "hello"
         await script(ws, agent)
         await ws.close()
         return ws
@@ -102,3 +105,68 @@ def test_not_connected_until_the_hello_is_accepted(monkeypatch):
     asyncio.run(against(quiet, agent))
     assert seen == {"connected": True, "error": None}
     assert agent.last_connected is not None
+
+
+def test_hello_carries_the_public_key_and_extra():
+    key = Ed25519PrivateKey.generate()
+    agent = Client("ws://x", uuid.uuid4(), key, "t", hello_extra={"ha_name": "Domov"})
+
+    async def quiet(ws, a):
+        pass
+
+    asyncio.run(against(quiet, agent))
+    assert HELLOS[-1]["public_key"] == identity.public_b64(key)
+    assert HELLOS[-1]["ha_name"] == "Domov"
+
+
+def test_pending_approval_retries_soon_and_clears(monkeypatch):
+    monkeypatch.setattr(client, "HELLO_ACCEPTED_AFTER", 0.05)
+
+    async def pending(ws, a):
+        await ws.close(code=client.CLOSE_PENDING)
+
+    refused, agent = asyncio.run(against(pending))
+    assert refused is False and agent.pending_approval is True
+    assert agent.last_error.startswith("Čeká na schválení")
+    assert agent._pending_attempt is True
+    assert [agent.backoff.pending() for _ in range(3)] == [10, 30, 30]
+
+    async def accepted(ws, a):
+        await asyncio.sleep(0.2)  # still open after the hello = accepted
+
+    asyncio.run(against(accepted, agent))
+    assert agent.pending_approval is False and agent._pending_attempt is False
+
+    asyncio.run(against(pending, agent))
+    assert agent.pending_approval is True
+
+    async def unpaired(ws, a):
+        await ws.close(code=client.CLOSE_UNAUTHORIZED)
+
+    assert asyncio.run(against(unpaired, agent))[0] is True
+    assert agent.pending_approval is False and agent._pending_attempt is False
+
+
+def test_run_waits_the_pending_delay(monkeypatch):
+    async def scenario():
+        agent = Client("ws://x", uuid.uuid4(), Ed25519PrivateKey.generate(), "t")
+        delays = []
+
+        async def pending(session, ha=None):
+            agent._pending_attempt = True
+            return False
+
+        async def wait(delay):
+            delays.append(delay)
+            if len(delays) == 3:
+                raise asyncio.CancelledError
+
+        monkeypatch.setattr(agent, "_connect_once", pending)
+        monkeypatch.setattr(agent, "wait", wait)
+        try:
+            await agent.run()
+        except asyncio.CancelledError:
+            pass
+        return delays
+
+    assert asyncio.run(scenario()) == [10, 30, 30]

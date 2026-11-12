@@ -3,7 +3,7 @@ import binascii
 import stat
 import uuid
 
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 
 from connector import identity, settings
 
@@ -60,6 +60,13 @@ def test_corrupt_identity_is_regenerated(data_dir):
     assert len((data_dir / "agent_key").read_bytes()) == 32
     (data_dir / "agent_id").write_text("not-a-uuid")
     assert identity.load_or_create()[0] not in (agent_id, new_id)
+
+
+def test_verification_code_vector():
+    # Shared with the backend (#590).
+    key = Ed25519PrivateKey.from_private_bytes(bytes([1]) * 32)
+    assert identity.public_b64(key) == "iojj3XQJ8ZX9UtstPLpdcspnCb8dlBIb83SIAbQPb1w="
+    assert identity.verification_code(key) == "GR2-Q7G"
 
 
 def test_version_from_build(monkeypatch):
