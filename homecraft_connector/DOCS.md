@@ -19,11 +19,17 @@ Soukromý klíč zůstává v doplňku (`/data`).
 
 | Volba | Výchozí | Význam |
 |---|---|---|
-| `server_url` | `wss://agent.homecraft.cz/api/agent/ws` | Adresa Homecraftu. |
+| `server_url` | `wss://agent.homecraft.cz/api/agent/ws` | Adresa Homecraftu. Jen `wss://`, výjimka viz níže. |
 | `paused` | `false` | `true` zapne pauzu při každém startu (vypnout ji pak jde jen v panelu do dalšího restartu). |
 
 Přístupový token se do možností **nezadává** (byl by v nich čitelný).
 Zadává se v panelu doplňku.
+
+**Jen pro test v LAN:** `server_url` smí být `ws://` (nešifrované), jen když je
+adresou privátní IP (`192.168.x.x`, `10.x.x.x`, `172.16–31.x.x`, IPv6 `fd…`
+nebo `fe80::…`), např. `ws://192.168.1.20:8000/api/agent/ws` pro vývojový
+Homecraft bez Cloudflare. Název hostitele ani `127.0.0.1` nejde. Doplněk při
+startu varuje v logu: **přístupový token jde po síti nešifrovaně**.
 
 ## Panel
 

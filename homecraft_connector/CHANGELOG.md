@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.1
+
+- `server_url` smí být `ws://` na privátní IP v LAN (vývojový Homecraft bez
+  Cloudflare, jen pro test). Doplněk při startu varuje, že spojení i přístupový
+  token jdou nešifrovaně. Názvy hostitelů, loopback a veřejné adresy dál jen
+  `wss://`.
+
 ## 0.5.0
 
 - Homecraft může doplňku poslat nový přístupový token (`access_token.set`,

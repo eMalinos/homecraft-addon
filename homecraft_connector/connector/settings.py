@@ -1,8 +1,10 @@
 """Where things are. Defaults are HA OS (under the Supervisor); env overrides
 them for the dev run next to HA Container, where there is no Supervisor."""
 
+import ipaddress
 import json
 import os
+import urllib.parse
 from pathlib import Path
 
 # CONNECTOR_DEV=1 allows a ws:// server without Cloudflare Access (and the panel
@@ -32,6 +34,21 @@ def options() -> dict:
     if os.environ.get("SERVER_URL"):
         opts["server_url"] = os.environ["SERVER_URL"]
     return opts
+
+
+def lan_ws(url: str) -> bool:
+    """A ws:// URL whose host is a literal private address (RFC 1918, ULA,
+    link-local): a dev Homecraft on the LAN without Cloudflare. Hostnames never
+    (DNS can point anywhere), loopback never (it is the add-on itself)."""
+    parts = urllib.parse.urlsplit(url)
+    if parts.scheme != "ws":
+        return False
+    try:
+        ip = ipaddress.ip_address(parts.hostname or "")
+    except ValueError:
+        return False
+    ip = getattr(ip, "ipv4_mapped", None) or ip
+    return ip.is_private and not (ip.is_loopback or ip.is_unspecified)
 
 
 def version() -> str:
