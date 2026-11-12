@@ -11,7 +11,7 @@ from collections.abc import Awaitable, Callable
 
 import aiohttp
 
-from . import content, policy, settings
+from . import content, ha_token, policy, settings
 
 logger = logging.getLogger(__name__)
 
@@ -139,10 +139,12 @@ class Sessions:
     async def _supervisor(self, msg: dict) -> dict:
         """`supervisor/api` straight to the Supervisor, answered as HA core
         answers it: the Supervisor's proxy to core refuses `supervisor/*`
-        from add-ons (`unauthorized`). `/ingress/session` it creates for
-        core only, so that one still fails."""
+        from add-ons (`unauthorized`). `/ingress/session` the Supervisor
+        creates for core only: that one goes to core as the panel's admin."""
         if not settings.SUPERVISOR_URL:
             return ha_error(msg.get("id"), "unsupported", "no Supervisor")
+        if msg["endpoint"] == "/ingress/session":
+            return await self._ingress_session(msg)
         timeout = msg.get("timeout", SUPERVISOR_TIMEOUT)
         try:
             async with self._http.request(
@@ -164,6 +166,43 @@ class Sessions:
             "success": True,
             "result": body.get("data", {}),
         }
+
+    async def _ingress_session(self, msg: dict) -> dict:
+        """Core directly (not the Supervisor's proxy, which refuses it), with
+        the admin token from the panel: core binds the session to that user."""
+        token = ha_token.load()
+        if token is None:
+            return ha_error(
+                msg.get("id"),
+                "no_ha_token",
+                "Ingress needs an HA admin token in the Homecraft Connector panel",
+            )
+        url = settings.HA_URL.replace("http", "ws", 1) + "/api/websocket"
+        try:
+            async with self._http.ws_connect(
+                url, timeout=aiohttp.ClientWSTimeout(ws_close=AUTH_TIMEOUT)
+            ) as ws:
+                await ws.receive_json(timeout=AUTH_TIMEOUT)  # auth_required
+                await ws.send_json({"type": "auth", "access_token": token})
+                auth = await ws.receive_json(timeout=AUTH_TIMEOUT)
+                if not isinstance(auth, dict) or auth.get("type") != "auth_ok":
+                    return ha_error(msg.get("id"), "ha_token_invalid", "HA refused the admin token")
+                await ws.send_json(
+                    {
+                        "id": 1,
+                        "type": "supervisor/api",
+                        "endpoint": "/ingress/session",
+                        "method": "post",
+                    }
+                )
+                while not (
+                    isinstance(reply := await ws.receive_json(timeout=AUTH_TIMEOUT), dict)
+                    and reply.get("id") == 1
+                ):
+                    pass
+        except (TimeoutError, aiohttp.ClientError, OSError, TypeError, ValueError) as e:
+            return ha_error(msg.get("id"), "unknown_error", type(e).__name__)
+        return {**reply, "id": msg.get("id")}
 
     async def _dashboard_refused(self, msg: dict) -> str | None:
         """Forbidden actions the saved config brings in that the dashboard in

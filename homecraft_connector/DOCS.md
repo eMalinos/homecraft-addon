@@ -15,6 +15,16 @@ Cloudflare). Home Assistant nepotřebuje veřejnou adresu, přesměrování port
 Kód obsahuje jen identifikátor doplňku a jeho veřejný klíč, žádné tajemství.
 Soukromý klíč zůstává v doplňku (`/data`).
 
+## Ingress do doplňků
+
+Homecraft nastavuje Node-RED, Grafanu, InfluxDB a go2rtc přes jejich ingress.
+Relaci ingressu vytvoří Home Assistant jen správci, proto doplněk potřebuje
+**Token správce Home Assistantu**: v profilu správce → **Zabezpečení** →
+**Dlouhodobé přístupové tokeny** → vytvořit, vložit do panelu a **Uložit**.
+Jde jen zadat a smazat, nikdy zobrazit, a doplněk ho používá jen na vytvoření
+relace ingressu (`/ingress/session`); Homecraftu ho nikdy nepošle. Bez něj
+funguje vše ostatní, jen požadavky do doplňků skončí chybou `no_ha_token`.
+
 ## Možnosti
 
 | Volba | Výchozí | Význam |

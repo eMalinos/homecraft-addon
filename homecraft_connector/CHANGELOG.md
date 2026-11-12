@@ -6,8 +6,11 @@
   jdou z doplňku rovnou na Supervisor. Supervisor je doplňkům přes WebSocket
   jádra HA nepouští (`unauthorized`). Homecraft dostane odpověď ve stejném
   tvaru jako dřív.
-- Relaci ingressu (`/ingress/session`) Supervisor vytvoří jen jádru HA, přes
-  Connector proto ingress do doplňků zatím nefunguje.
+- Ingress do doplňků (Node-RED, Grafana, InfluxDB, go2rtc): relaci ingressu
+  vytvoří Supervisor jen jádru HA a jádro jen správci. Doplněk proto o ni žádá
+  jádro jako správce, s **tokenem správce Home Assistantu** z panelu (nová
+  sekce, jen zadat a smazat, `/data/ha_token`). Na nic jiného ho nepoužije
+  a Homecraftu ho nepošle. Bez tokenu skončí ingress chybou `no_ha_token`.
 
 ## 0.6.0
 

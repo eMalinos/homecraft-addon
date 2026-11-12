@@ -9,7 +9,7 @@ import aiohttp
 import pytest
 from aiohttp import web
 
-from connector import http_proxy, settings, ws_proxy
+from connector import ha_token, http_proxy, settings, ws_proxy
 from connector.policy import OpError
 
 DASHBOARDS: dict[str, dict] = {}  # url_path -> live config (lovelace/config)
@@ -378,5 +378,36 @@ def test_supervisor_api_goes_to_the_supervisor(monkeypatch):
             assert replies[2]["error"] == {"code": "unknown_error", "message": "already installed"}
             assert {"install": "a0d7b954_influxdb", "auth": "Bearer t0k"} in seen
             assert not [c for c in seen if c.get("type") == "supervisor/api"]  # core never asked
+
+    asyncio.run(scenario())
+
+
+def test_ingress_session_goes_to_core_as_the_admin(monkeypatch):
+    """The Supervisor creates ingress sessions for core only, and its proxy
+    refuses `supervisor/*` from add-ons: the panel's admin token asks core."""
+
+    async def scenario():
+        async with (
+            fake_ha(monkeypatch, token="admin") as (seen, _),
+            aiohttp.ClientSession() as http,
+        ):
+            monkeypatch.setattr(settings, "SUPERVISOR_URL", settings.HA_URL)
+            monkeypatch.setattr(settings, "SUPERVISOR_TOKEN", "not-admin")
+            pushed: list[dict] = []
+
+            async def push(data):
+                pushed.append(data)
+
+            sessions = ws_proxy.Sessions(http, push)
+            msg = {"type": "supervisor/api", "endpoint": "/ingress/session", "method": "post"}
+            no_token = await sessions._supervisor({"id": 7, **msg})
+            ha_token.save("wrong")
+            wrong = await sessions._supervisor({"id": 8, **msg})
+            ha_token.save("admin")
+            ok = await sessions._supervisor({"id": 9, **msg})
+            assert no_token["error"]["code"] == "no_ha_token"
+            assert wrong["error"]["code"] == "ha_token_invalid"
+            assert ok == {"id": 9, "type": "result", "success": True, "result": 1}
+            assert [c for c in seen if c.get("type") == "supervisor/api"] == [{"id": 1, **msg}]
 
     asyncio.run(scenario())
