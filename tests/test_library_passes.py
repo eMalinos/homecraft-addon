@@ -1,5 +1,5 @@
 """The current HFB library passes the content check (#557):
-HFB_REPO=~/Projects/ha-features-builder pytest -q tests/test_library_passes.py
+HFB_REPO=~/Projects/homecraft pytest -q tests/test_library_passes.py
 Needs HFB_REPO/backend/.venv (uv sync); skipped without the checkout."""
 
 import json
@@ -11,7 +11,7 @@ import pytest
 
 from connector import content
 
-HFB = Path(os.environ.get("HFB_REPO", Path(__file__).parents[2] / "ha-features-builder"))
+HFB = Path(os.environ.get("HFB_REPO", Path(__file__).parents[2] / "homecraft"))
 PYTHON = HFB / "backend" / ".venv" / "bin" / "python"
 
 
@@ -39,6 +39,7 @@ def test_the_features_with_checked_content_are_all_seen(rendered):
         "heating",
         "homecraft",
         "internet",
+        "nas",
         "notifications",
         "observability",
     }
