@@ -96,3 +96,15 @@ def flush() -> None:
 def recent() -> list[dict]:
     """Newest first."""
     return list(reversed(_recent))
+
+
+def summary(since: float) -> dict:
+    """Operations since `since` for the overview tile. Counts only what is in
+    memory: `capped` says the last MAXLEN all fall in the window, so there may
+    have been more."""
+    entries = [e for e in _recent if e.get("ts", 0) >= since]
+    return {
+        "count": len(entries),
+        "refused": sum(not e.get("ok") for e in entries),
+        "capped": len(_recent) == MAXLEN and _recent[0].get("ts", 0) >= since,
+    }

@@ -14,6 +14,7 @@ anyway, so the nonce is against other origins and blind requests."""
 
 import logging
 import secrets
+import time
 from pathlib import Path
 
 from aiohttp import web
@@ -88,6 +89,7 @@ async def _status(request: web.Request) -> web.Response:
             "token_updated_at": access_token.updated_by_homecraft(),
             "ha_token_set": ha_token.load() is not None,
             "paused": client.paused,
+            "audit_24h": audit.summary(time.time() - 86400),
         }
     )
 

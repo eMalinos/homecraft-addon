@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.8.0
+
+- Panel má záložky **Přehled · Zabezpečení · Audit**. Přehled ukazuje dlaždice
+  se stavem spojení, tokenů a počtem operací za 24 h (s počtem odmítnutých);
+  přepínač pozastavení je přímo na dlaždici. Spojení, spárování a tokeny jsou
+  v záložce Zabezpečení, tabulka operací v záložce Audit.
+- Na telefonu jsou dlaždice ve dvou sloupcích a záložky se dají posouvat.
+
 ## 0.7.0
 
 - Spárování bez kopírování kódu: nespárovaný doplněk se Homecraftu sám ohlásí

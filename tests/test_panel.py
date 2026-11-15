@@ -39,6 +39,9 @@ def test_page_and_status(run_panel):
     assert 'id="verification"' in html and "Čeká na schválení v Homecraftu" in html
     assert status["connected"] is False and status["paused"] is False
     assert status["token_set"] is False
+    assert status["audit_24h"] == {"count": 0, "refused": 0, "capped": False}
+    for tab in ("overview", "security", "audit"):
+        assert f'href="#{tab}"' in html and f'data-tab="{tab}"' in html
 
 
 def test_state_changes_need_the_csrf_header(run_panel, agent):

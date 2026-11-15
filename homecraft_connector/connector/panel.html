@@ -52,16 +52,66 @@ th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--line
 td.target { white-space: normal; overflow-wrap: anywhere; font-family: ui-monospace, Menlo, monospace; }
 td.ok { color: var(--ok); } td.bad { color: var(--bad); } td.warn { color: var(--warn); }
 .verification { font: 700 32px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: 2px; }
+.stack { display: grid; gap: 16px; }
+.tabs { display: flex; gap: 4px; overflow-x: auto; border-bottom: 1px solid var(--line); padding-bottom: 8px; }
+.tabs a { padding: 10px 14px; border-radius: 8px; color: var(--muted); text-decoration: none;
+  font-weight: 600; white-space: nowrap; }
+.tabs a[aria-current="page"] { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); }
+.tiles { display: grid; gap: 16px; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
+.tile { display: flex; flex-direction: column; gap: 6px; color: inherit; text-decoration: none; min-height: 130px; }
+a.tile:hover { border-color: var(--accent); }
+.tile-k { font-size: 13px; font-weight: 600; color: var(--muted); margin: 0; }
+.tile-big { font-size: 28px; font-weight: 700; line-height: 1.15; }
+.tile-text { font-size: 20px; }
+.tile p { margin: 0; font-size: 13px; }
+@media (max-width: 560px) { .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .tiles > section.tile { grid-column: span 2; } .tile-big { font-size: 22px; } }
 [hidden] { display: none !important; }
 </style>
 </head>
 <body>
 <main>
-  <header>
-    <h1>Homecraft Connector</h1>
-    <div class="muted">Verze <span id="version">–</span></div>
+  <header class="row">
+    <div>
+      <h1>Homecraft Connector</h1>
+      <div class="muted">Verze <span id="version">–</span></div>
+    </div>
+    <span id="headConn" class="badge off" style="margin-left:auto">Odpojeno</span>
   </header>
 
+  <nav class="tabs" aria-label="Sekce">
+    <a href="#overview">Přehled</a>
+    <a href="#security">Zabezpečení</a>
+    <a href="#audit">Audit</a>
+  </nav>
+
+  <div data-tab="overview" class="tiles">
+    <a class="card tile" href="#security">
+      <span class="tile-k">Spojení</span>
+      <span class="tile-big" id="tConn">–</span>
+      <span class="muted" id="tConnSub"></span>
+    </a>
+    <a class="card tile" href="#security">
+      <span class="tile-k">Zabezpečení</span>
+      <span class="tile-big tile-text" id="tSec">–</span>
+      <span class="muted" id="tSecSub"></span>
+    </a>
+    <a class="card tile" href="#audit">
+      <span class="tile-k">Audit</span>
+      <span class="tile-big" id="tAudit">–</span>
+      <span class="muted" id="tAuditSub"></span>
+    </a>
+    <section class="card tile">
+      <h2 class="tile-k">Pozastavení</h2>
+      <label class="switch"><input type="checkbox" id="paused"> Pozastavit Homecraft</label>
+      <p class="muted">Doplněk odmítne každý požadavek z Homecraftu (chyba „paused“).
+        Otevřená sezení do Home Assistantu se hned zavřou, spojení s Homecraftem zůstává.
+        Nastavení přežije restart doplňku.</p>
+      <div id="pauseMsg" class="msg"></div>
+    </section>
+  </div>
+
+  <div data-tab="security" class="stack" hidden>
   <section class="card">
     <h2>Spojení</h2>
     <div class="row">
@@ -75,15 +125,6 @@ td.ok { color: var(--ok); } td.bad { color: var(--bad); } td.warn { color: var(-
       <dt>Poslední chyba</dt><dd id="lastError">–</dd>
     </dl>
     <div id="connMsg" class="msg"></div>
-  </section>
-
-  <section class="card">
-    <h2>Pozastavení</h2>
-    <label class="switch"><input type="checkbox" id="paused"> Pozastavit Homecraft</label>
-    <p class="muted">Při pozastavení doplněk odmítne každý požadavek z Homecraftu (chyba „paused“).
-      Otevřená sezení do Home Assistantu se hned zavřou, spojení s Homecraftem zůstává.
-      Nastavení přežije restart doplňku.</p>
-    <div id="pauseMsg" class="msg"></div>
   </section>
 
   <section class="card">
@@ -134,8 +175,9 @@ td.ok { color: var(--ok); } td.bad { color: var(--bad); } td.warn { color: var(-
     </form>
     <div id="haTokenMsg" class="msg"></div>
   </section>
+  </div>
 
-  <section class="card">
+  <section class="card" data-tab="audit" hidden>
     <h2>Audit posledních operací</h2>
     <div class="scroll">
       <table>
@@ -196,7 +238,36 @@ async function refreshStatus() {
   $("haTokenSet").hidden = !s.ha_token_set;
   $("haTokenForm").hidden = s.ha_token_set;
   $("tokenUpdated").textContent = "(aktualizován " + fmtTime(s.token_updated_at) + " Homecraftem)";
+
+  $("headConn").textContent = $("conn").textContent;
+  $("headConn").className = $("conn").className;
+  $("tConn").textContent = s.paused ? "Pozastaveno" : s.connected ? "Online" : "Odpojeno";
+  $("tConnSub").textContent = s.pending_approval ? "Čeká na schválení v Homecraftu"
+    : s.connected ? hostOf(s.server_url) : s.last_error || "Připojuji…";
+  $("tSec").textContent = !s.token_set ? "Chybí přístupový token"
+    : !s.ha_token_set ? "Chybí token správce HA" : "Vše nastaveno";
+  $("tSecSub").textContent = !s.token_set ? "Bez něj se doplněk k Homecraftu nepřipojí"
+    : !s.ha_token_set ? "Ingress do doplňků (Node-RED, Grafana…) nepůjde"
+    : "Přístupový token Homecraftu · Token správce HA";
+  const a = s.audit_24h;
+  $("tAudit").textContent = a.count + (a.capped ? "+" : "");
+  $("tAuditSub").textContent = "operací za 24 h · " + a.refused + " odmítnutých";
 }
+
+function hostOf(url) {
+  try { return new URL(url).host; } catch { return url; }
+}
+
+function showTab() {
+  const panels = [...document.querySelectorAll("[data-tab]")];
+  const id = panels.some((p) => p.dataset.tab === location.hash.slice(1)) ? location.hash.slice(1) : "overview";
+  for (const p of panels) p.hidden = p.dataset.tab !== id;
+  for (const a of document.querySelectorAll(".tabs a")) {
+    if (a.hash === "#" + id) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
+  }
+}
+window.addEventListener("hashchange", showTab);
+showTab();
 
 const RESULT = { paused: ["Pozastaveno", "warn"], not_allowed: ["Nepovoleno", "bad"] };
 
