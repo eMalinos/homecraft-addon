@@ -90,3 +90,14 @@ def test_refused_ws_send_is_audited_with_its_code(code):
     reply = asyncio.run(agent._reply(req, Conn))
     assert reply == {"id": 1, "ok": True, "result": None}
     assert audit.recent()[0]["code"] == code and audit.recent()[0]["ok"] is False
+
+
+def test_summary_counts_the_window_and_flags_a_full_memory():
+    audit._recent.clear()
+    audit._recent.append({"ts": 100, "op": "http", "target": "", "ok": False})
+    audit.record("file.read", "a.yaml", True)
+    audit.record("file.write", "b.yaml", False, "not_allowed")
+    assert audit.summary(since=200) == {"count": 2, "refused": 1, "capped": False}
+    for _ in range(audit.MAXLEN):
+        audit.record("file.read", "a.yaml", True)
+    assert audit.summary(since=200) == {"count": audit.MAXLEN, "refused": 0, "capped": True}
