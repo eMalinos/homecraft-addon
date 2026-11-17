@@ -83,7 +83,7 @@ class HttpProxy:
 
     def __init__(self, session: aiohttp.ClientSession) -> None:
         self._session = session
-        self._flows: set[str] = set()  # config flows this connection started (influxdb)
+        self._flows: dict[str, str] = {}  # config flows this connection started -> handler
 
     async def handle(self, req: dict) -> dict:
         method, path = req["method"], req["path"]
@@ -105,9 +105,13 @@ class HttpProxy:
             if method == "POST":
                 await self._check_ingress(slug, subpath, path, req.get("headers"), body)
         elif kind == "flow":
-            if ref not in self._flows:
+            handler = self._flows.get(ref)
+            if handler is None:
                 raise refused
-            if method == "POST":
+            if method == "POST" and handler != "influxdb":
+                if not policy.flow_step_allowed(handler, body):
+                    raise refused
+            elif method == "POST":
                 host = policy.flow_step_host(body)
                 if host is False or (host is not None and not await _host_allowed(host)):
                     raise refused
@@ -117,9 +121,9 @@ class HttpProxy:
                 await self._check_config(route, body)
         result = await self._forward(kind, method, path, req.get("headers"), body)
         if kind == "core" and path.split("?", 1)[0] == policy.FLOW and result["status"] == 200:
-            self._track_flow(result)
+            self._track_flow(result, json.loads(body or b"{}")["handler"])
         elif kind == "flow" and method == "DELETE":
-            self._flows.discard(ref)
+            self._flows.pop(ref, None)
         return result
 
     async def _check_config(self, route: str, body: bytes | None) -> None:
@@ -164,13 +168,13 @@ class HttpProxy:
         if what:
             raise content.refused(f"{slug}{subpath}", what)
 
-    def _track_flow(self, result: dict) -> None:
+    def _track_flow(self, result: dict, handler: str) -> None:
         try:
             flow_id = json.loads(base64.b64decode(result["body_b64"])).get("flow_id")
         except (ValueError, AttributeError):
             return
         if isinstance(flow_id, str):
-            self._flows.add(flow_id)
+            self._flows[flow_id] = handler
 
     async def _forward(
         self, kind: str, method: str, path: str, in_headers: object, body: bytes | None

@@ -163,8 +163,15 @@ _ID = r"[A-Za-z0-9_-]+"
 _SEG = r"[A-Za-z0-9_.~%-]+"  # one URL-quoted path segment ("." and ".." refused earlier)
 FLOW = "/api/config/config_entries/flow"
 _FLOW_STEP_RE = re.compile(rf"{FLOW}/({_ID})")
-# Config flows Homecraft may start (influxdb_admin).
-FLOW_HANDLERS = frozenset({"influxdb"})
+# Config flows Homecraft may start: influxdb_admin (steps: flow_step_host), and
+# the library's ha_integration entries -> the fields their steps may fill.
+FLOW_FIELDS = {
+    "speedtestdotnet": frozenset(),
+    "ping": frozenset({"host"}),
+    "holiday": frozenset({"country", "province"}),
+    "sql": frozenset({"name", "query", "column", "additional_options"}),  # no db_url: recorder only
+}
+FLOW_HANDLERS = frozenset({"influxdb", *FLOW_FIELDS})
 INFLUXDB_ADDON_HOST = "a0d7b954-influxdb"
 # references.py: where an entity is used, and fixing it on a rename
 CONFIG_RE = re.compile(rf"/api/config/(automation|script)/config/{_ID}")
@@ -242,6 +249,13 @@ def http_target(method: str, path: str, body: bytes | None = None) -> tuple[str,
 
 def ingress_allowed(slug: str, method: str, subpath: str) -> bool:
     return any(method == m and re.fullmatch(p, subpath) for m, p in INGRESS_ROUTES.get(slug, ()))
+
+
+def flow_step_allowed(handler: str, body: bytes | None) -> bool:
+    """A step body of a FLOW_FIELDS flow: only that handler's fields."""
+    data = _json(body)
+    fields = FLOW_FIELDS.get(handler)
+    return fields is not None and isinstance(data, dict) and set(data) <= fields
 
 
 def flow_step_host(body: bytes | None) -> str | None | bool:

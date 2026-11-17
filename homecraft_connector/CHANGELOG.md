@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.8.1
+
+- Homecraft smí přes Použít založit i integrace z knihovny: **Speedtest.net**,
+  **Ping**, **Holiday** a **SQL** (velikost databáze recorderu). Každý krok
+  průvodce smí vyplnit jen pole, která daná integrace potřebuje; SQL jen nad
+  databází recorderu (bez `db_url`).
+
 ## 0.8.0
 
 - Panel má záložky **Přehled · Zabezpečení · Audit**. Přehled ukazuje dlaždice

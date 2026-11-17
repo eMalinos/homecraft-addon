@@ -4,6 +4,7 @@ import pytest
 
 from connector.policy import (
     file_allowed,
+    flow_step_allowed,
     flow_step_host,
     http_target,
     ingress_allowed,
@@ -153,6 +154,7 @@ HTTP = [
     ("GET", "/api/", None, ("core", "/api/", "")),
     ("POST", "/api/config/core/check_config", None, ("core", "/api/config/core/check_config", "")),
     ("POST", FLOW, INFLUX, ("core", FLOW, "")),
+    ("POST", FLOW, json.dumps({"handler": "sql"}).encode(), ("core", FLOW, "")),
     ("POST", f"{FLOW}/abc123", b"{}", ("flow", "abc123", "")),
     ("DELETE", f"{FLOW}/abc123", None, ("flow", "abc123", "")),
     ("POST", "/api/config/config_entries/entry/01JABC/reload", None, ("core", ...)),
@@ -250,6 +252,25 @@ FLOW_STEPS = [
     (b"not json", False),
     (None, False),
 ]
+
+
+@pytest.mark.parametrize(
+    ("handler", "body", "expected"),
+    [
+        ("speedtestdotnet", {}, True),
+        ("ping", {"host": "1.1.1.1"}, True),
+        ("holiday", {"country": "CZ"}, True),
+        ("sql", {"name": "HFB recorder database size"}, True),
+        ("sql", {"query": "SELECT 1", "column": "size", "additional_options": {}}, True),
+        ("sql", {"name": "x", "db_url": "postgresql://evil/db"}, False),  # recorder only
+        ("ping", {"next_step_id": "x"}, False),
+        ("influxdb", {}, False),  # its steps go through flow_step_host
+        ("ssh", {}, False),
+    ],
+)
+def test_flow_step_allowed(handler, body, expected):
+    assert flow_step_allowed(handler, json.dumps(body).encode()) is expected
+    assert not flow_step_allowed(handler, b"not json")
 
 
 @pytest.mark.parametrize(("body", "expected"), FLOW_STEPS)

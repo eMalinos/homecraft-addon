@@ -247,6 +247,35 @@ def test_http_influxdb_flow_only_own_and_private(monkeypatch):
     asyncio.run(scenario())
 
 
+def test_http_library_flow_only_its_fields(monkeypatch):
+    flow = "/api/config/config_entries/flow"
+
+    async def scenario():
+        async with fake_ha(monkeypatch) as (seen, _), aiohttp.ClientSession() as http:
+            proxy = http_proxy.HttpProxy(http)
+            started = await proxy.handle(
+                {"method": "POST", "path": flow, "body_b64": b64({"handler": "sql"})}
+            )
+            assert started["status"] == 200
+
+            async def step(body):
+                return await proxy.handle(
+                    {"method": "POST", "path": f"{flow}/f1", "body_b64": b64(body)}
+                )
+
+            assert (await step({"name": "HFB recorder database size"}))["status"] == 200
+            for body in (
+                {"name": "x", "db_url": "sqlite:////config/secrets.db"},
+                {"url": "http://a0d7b954-influxdb:8086"},
+            ):
+                with pytest.raises(OpError) as e:
+                    await step(body)
+                assert e.value.code == "not_allowed"
+            assert [s for s in seen if "flow" in s] == [{"flow": "POST", "id": "f1"}]
+
+    asyncio.run(scenario())
+
+
 def test_http_ingress_per_addon_routes(monkeypatch):
     async def scenario():
         async with fake_ha(monkeypatch) as (seen, _), aiohttp.ClientSession() as http:
