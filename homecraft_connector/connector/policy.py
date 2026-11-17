@@ -143,6 +143,10 @@ def ws_allowed(msg: object) -> bool:
     if m := re.fullmatch(r"([a-z_]+)/([a-z_]+)", t):
         if m.group(1) in HELPER_DOMAINS and m.group(2) in HELPER_VERBS:
             return True
+    if t == "config_entries/update":  # ha_integration_applicator: polling off, nothing else
+        return set(msg) <= {"id", "type", "entry_id", "pref_disable_polling"} and (
+            msg.get("pref_disable_polling") is True and isinstance(msg.get("entry_id"), str)
+        )
     if t == "lovelace/dashboards/create":
         return msg.get("url_path") == OWN_DASHBOARD
     if t == "call_service":
@@ -163,8 +167,37 @@ _ID = r"[A-Za-z0-9_-]+"
 _SEG = r"[A-Za-z0-9_.~%-]+"  # one URL-quoted path segment ("." and ".." refused earlier)
 FLOW = "/api/config/config_entries/flow"
 _FLOW_STEP_RE = re.compile(rf"{FLOW}/({_ID})")
-# Config flows Homecraft may start (influxdb_admin).
-FLOW_HANDLERS = frozenset({"influxdb"})
+
+
+# Config flows Homecraft may start: influxdb_admin (steps: flow_step_host), and
+# the library's ha_integration entries -> per field, the values its steps may
+# send (tests/test_library_passes.py checks them against the library).
+def _text(v: object) -> bool:
+    return isinstance(v, str)
+
+
+SQL_QUERIES = frozenset(  # observability: the recorder's own database size
+    {
+        "SELECT ROUND(page_count * page_size / 1048576.0, 0) AS size "
+        "FROM pragma_page_count(), pragma_page_size();"
+    }
+)
+SQL_OPTIONS = frozenset({"unit_of_measurement", "device_class", "state_class"})
+FLOW_FIELDS = {
+    "speedtestdotnet": {},
+    "ping": {"host": lambda v: v == "1.1.1.1"},
+    "holiday": {"country": _text},
+    # no db_url: the recorder's database only
+    "sql": {
+        "name": _text,
+        "query": lambda v: isinstance(v, str) and v in SQL_QUERIES,
+        "column": _text,
+        "additional_options": lambda v: (
+            isinstance(v, dict) and set(v) <= SQL_OPTIONS and all(map(_text, v.values()))
+        ),
+    },
+}
+FLOW_HANDLERS = frozenset({"influxdb", *FLOW_FIELDS})
 INFLUXDB_ADDON_HOST = "a0d7b954-influxdb"
 # references.py: where an entity is used, and fixing it on a rename
 CONFIG_RE = re.compile(rf"/api/config/(automation|script)/config/{_ID}")
@@ -242,6 +275,15 @@ def http_target(method: str, path: str, body: bytes | None = None) -> tuple[str,
 
 def ingress_allowed(slug: str, method: str, subpath: str) -> bool:
     return any(method == m and re.fullmatch(p, subpath) for m, p in INGRESS_ROUTES.get(slug, ()))
+
+
+def flow_step_allowed(handler: str, body: bytes | None) -> bool:
+    """A step body of a FLOW_FIELDS flow: only that handler's fields and values."""
+    data = _json(body)
+    fields = FLOW_FIELDS.get(handler)
+    if fields is None or not isinstance(data, dict):
+        return False
+    return all(k in fields and fields[k](v) for k, v in data.items())
 
 
 def flow_step_host(body: bytes | None) -> str | None | bool:

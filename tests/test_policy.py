@@ -3,7 +3,9 @@ import json
 import pytest
 
 from connector.policy import (
+    SQL_QUERIES,
     file_allowed,
+    flow_step_allowed,
     flow_step_host,
     http_target,
     ingress_allowed,
@@ -38,6 +40,7 @@ SET_TEMP = {
 
 WS_ALLOWED = [
     {"type": "get_states"},
+    {"id": 3, "type": "config_entries/update", "entry_id": "01J", "pref_disable_polling": True},
     {"type": "get_config"},
     {"type": "lovelace/config/save", "config": {}},
     {"type": "lovelace/dashboards/list"},
@@ -77,6 +80,9 @@ WS_ALLOWED = [
 
 WS_REFUSED = [
     None,
+    {"type": "config_entries/update", "entry_id": "01J", "pref_disable_polling": False},
+    {"type": "config_entries/update", "entry_id": "01J", "pref_disable_new_entities": True},
+    {"type": "config_entries/update", "entry_id": "01J", "title": "x"},
     "get_states",
     {},
     {"type": 1},
@@ -153,6 +159,7 @@ HTTP = [
     ("GET", "/api/", None, ("core", "/api/", "")),
     ("POST", "/api/config/core/check_config", None, ("core", "/api/config/core/check_config", "")),
     ("POST", FLOW, INFLUX, ("core", FLOW, "")),
+    ("POST", FLOW, json.dumps({"handler": "sql"}).encode(), ("core", FLOW, "")),
     ("POST", f"{FLOW}/abc123", b"{}", ("flow", "abc123", "")),
     ("DELETE", f"{FLOW}/abc123", None, ("flow", "abc123", "")),
     ("POST", "/api/config/config_entries/entry/01JABC/reload", None, ("core", ...)),
@@ -250,6 +257,34 @@ FLOW_STEPS = [
     (b"not json", False),
     (None, False),
 ]
+
+
+RECORDER_SIZE = next(iter(SQL_QUERIES))
+OPTIONS = {"unit_of_measurement": "MiB", "device_class": "data_size", "state_class": "measurement"}
+
+
+@pytest.mark.parametrize(
+    ("handler", "body", "expected"),
+    [
+        ("speedtestdotnet", {}, True),
+        ("ping", {"host": "1.1.1.1"}, True),
+        ("ping", {"host": "10.0.0.1"}, False),  # no LAN scan
+        ("holiday", {"country": "CZ"}, True),
+        ("holiday", {"country": ["CZ"]}, False),
+        ("sql", {"name": "HFB recorder database size"}, True),
+        ("sql", {"query": RECORDER_SIZE, "column": "size", "additional_options": OPTIONS}, True),
+        ("sql", {"query": "SELECT shared_attrs FROM state_attributes;"}, False),
+        ("sql", {"query": ["SELECT 1"]}, False),
+        ("sql", {"additional_options": {"value_template": "{{ states | list }}"}}, False),
+        ("sql", {"name": "x", "db_url": "postgresql://evil/db"}, False),  # recorder only
+        ("ping", {"next_step_id": "x"}, False),
+        ("influxdb", {}, False),  # its steps go through flow_step_host
+        ("ssh", {}, False),
+    ],
+)
+def test_flow_step_allowed(handler, body, expected):
+    assert flow_step_allowed(handler, json.dumps(body).encode()) is expected
+    assert not flow_step_allowed(handler, b"not json")
 
 
 @pytest.mark.parametrize(("body", "expected"), FLOW_STEPS)
