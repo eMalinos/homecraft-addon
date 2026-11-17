@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from connector import content
+from connector import content, policy
 
 HFB = Path(os.environ.get("HFB_REPO", Path(__file__).parents[2] / "homecraft"))
 PYTHON = HFB / "backend" / ".venv" / "bin" / "python"
@@ -106,3 +106,20 @@ def test_node_types_are_the_librarys(rendered):
 
 def test_go2rtc_keys_are_the_librarys(rendered):
     assert {r["name"] for r in rendered if r["kind"] == "go2rtc_config"} == content.GO2RTC_KEYS
+
+
+def test_integration_steps_pass():
+    """Every ha_integration the library creates passes the flow policy (#12)."""
+    entries = [
+        (c["filename"].split("/")[0], json.loads(c["content"]))
+        for path in sorted((HFB / "library").glob("*/*.json"))
+        if isinstance(data := json.loads(path.read_text()), dict)
+        for c in data.get("components", [])
+        if c["component_type"] == "ha_integration"
+    ]
+    if not entries:
+        pytest.skip(f"no HFB library at {HFB}")
+    assert {d for d, _ in entries} == {"sql", "speedtestdotnet", "ping", "holiday"}
+    for domain, entry in entries:
+        for step in entry["steps"]:
+            assert policy.flow_step_allowed(domain, json.dumps(step).encode()), (domain, step)

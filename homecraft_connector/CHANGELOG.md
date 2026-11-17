@@ -3,9 +3,11 @@
 ## 0.8.1
 
 - Homecraft smí přes Použít založit i integrace z knihovny: **Speedtest.net**,
-  **Ping**, **Holiday** a **SQL** (velikost databáze recorderu). Každý krok
-  průvodce smí vyplnit jen pole, která daná integrace potřebuje; SQL jen nad
-  databází recorderu (bez `db_url`).
+  **Ping**, **Holiday** a **SQL** (velikost databáze recorderu). Kroky průvodce
+  smí poslat jen pole a hodnoty, které knihovna používá: SQL jen s dotazem na
+  velikost databáze recorderu (bez `db_url`), Ping jen na `1.1.1.1`.
+- U nové integrace smí Homecraft vypnout automatické dotazování
+  (`pref_disable_polling`), jinak nic na záznamu integrace nemění.
 
 ## 0.8.0
 

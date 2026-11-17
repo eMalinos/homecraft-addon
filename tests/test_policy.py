@@ -3,6 +3,7 @@ import json
 import pytest
 
 from connector.policy import (
+    SQL_QUERIES,
     file_allowed,
     flow_step_allowed,
     flow_step_host,
@@ -39,6 +40,7 @@ SET_TEMP = {
 
 WS_ALLOWED = [
     {"type": "get_states"},
+    {"id": 3, "type": "config_entries/update", "entry_id": "01J", "pref_disable_polling": True},
     {"type": "get_config"},
     {"type": "lovelace/config/save", "config": {}},
     {"type": "lovelace/dashboards/list"},
@@ -78,6 +80,9 @@ WS_ALLOWED = [
 
 WS_REFUSED = [
     None,
+    {"type": "config_entries/update", "entry_id": "01J", "pref_disable_polling": False},
+    {"type": "config_entries/update", "entry_id": "01J", "pref_disable_new_entities": True},
+    {"type": "config_entries/update", "entry_id": "01J", "title": "x"},
     "get_states",
     {},
     {"type": 1},
@@ -254,14 +259,23 @@ FLOW_STEPS = [
 ]
 
 
+RECORDER_SIZE = next(iter(SQL_QUERIES))
+OPTIONS = {"unit_of_measurement": "MiB", "device_class": "data_size", "state_class": "measurement"}
+
+
 @pytest.mark.parametrize(
     ("handler", "body", "expected"),
     [
         ("speedtestdotnet", {}, True),
         ("ping", {"host": "1.1.1.1"}, True),
+        ("ping", {"host": "10.0.0.1"}, False),  # no LAN scan
         ("holiday", {"country": "CZ"}, True),
+        ("holiday", {"country": ["CZ"]}, False),
         ("sql", {"name": "HFB recorder database size"}, True),
-        ("sql", {"query": "SELECT 1", "column": "size", "additional_options": {}}, True),
+        ("sql", {"query": RECORDER_SIZE, "column": "size", "additional_options": OPTIONS}, True),
+        ("sql", {"query": "SELECT shared_attrs FROM state_attributes;"}, False),
+        ("sql", {"query": ["SELECT 1"]}, False),
+        ("sql", {"additional_options": {"value_template": "{{ states | list }}"}}, False),
         ("sql", {"name": "x", "db_url": "postgresql://evil/db"}, False),  # recorder only
         ("ping", {"next_step_id": "x"}, False),
         ("influxdb", {}, False),  # its steps go through flow_step_host

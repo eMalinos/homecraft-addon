@@ -78,6 +78,15 @@ async def _host_allowed(host: str) -> bool:
     return bool(addrs) and all(a.is_private and not a.is_loopback for a in addrs)
 
 
+def _flow_done(result: dict) -> bool:
+    """HA created the entry or aborted: the flow is gone."""
+    try:
+        reply = json.loads(base64.b64decode(result["body_b64"]))
+    except (ValueError, KeyError, TypeError):
+        return False
+    return isinstance(reply, dict) and reply.get("type") in ("create_entry", "abort")
+
+
 class HttpProxy:
     """The `http` operation for one Homecraft connection."""
 
@@ -122,7 +131,7 @@ class HttpProxy:
         result = await self._forward(kind, method, path, req.get("headers"), body)
         if kind == "core" and path.split("?", 1)[0] == policy.FLOW and result["status"] == 200:
             self._track_flow(result, json.loads(body or b"{}")["handler"])
-        elif kind == "flow" and method == "DELETE":
+        elif kind == "flow" and (method == "DELETE" or _flow_done(result)):
             self._flows.pop(ref, None)
         return result
 
