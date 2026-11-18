@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 import aiohttp
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from . import access_token, audit, files, http_proxy, identity, policy, ws_proxy
+from . import access_token, audit, core_config, files, http_proxy, identity, policy, ws_proxy
 
 logger = logging.getLogger(__name__)
 
@@ -514,6 +514,8 @@ def _audit_target(req: dict) -> str:
         return f"{req.get('method')} {path.split('?', 1)[0]}"
     if op in FILE_OPS:
         return str(req.get("path"))
+    if op == "config.packages_include":
+        return core_config.FILE
     return ""
 
 
@@ -532,6 +534,9 @@ async def _dispatch(op: object, req: dict, conn: _Conn) -> object:
         call = FILE_OPS[op](req)
         async with conn.ops:
             return await asyncio.to_thread(*call)
+    if op == "config.packages_include":
+        async with conn.ops:
+            return await core_config.packages_include(conn.http)
     raise policy.OpError("unknown_op", str(op)[:64])
 
 
