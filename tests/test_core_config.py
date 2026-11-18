@@ -115,9 +115,42 @@ def test_missing_and_symlink(root, tmp_path):
     assert (tmp_path / "elsewhere.yaml").read_text() == "default_config:\n"
 
 
-def test_keeps_permissions(root):
+@pytest.mark.parametrize("mode", [0o640, 0o666])  # 0o666: wider than the umask allows
+def test_keeps_permissions(root, mode):
     path = root / "configuration.yaml"
     path.write_text("default_config:\n")
-    path.chmod(0o640)
+    path.chmod(mode)
     run(FakeHA())
-    assert path.stat().st_mode & 0o777 == 0o640
+    assert path.stat().st_mode & 0o777 == mode
+
+
+def test_comments_and_crlf_in_an_existing_block(root):
+    (root / "configuration.yaml").write_bytes(
+        b"homeassistant: # core\r\n  # the name\r\n  name: Home\r\n"
+    )
+    assert run(FakeHA()) == "added"
+    assert (root / "configuration.yaml").read_bytes() == (
+        b"homeassistant: # core\r\n  packages: !include_dir_named packages\r\n"
+        b"  # the name\r\n  name: Home\r\n"
+    )
+
+
+def test_calls_run_one_at_a_time(root):
+    """A failed check's restore never undoes the other call's include."""
+    (root / "configuration.yaml").write_text("default_config:\n")
+
+    class Slow(FakeHA):
+        async def core(self, method, path):
+            await asyncio.sleep(0.05)
+            return await super().core(method, path)
+
+    async def both():
+        return await asyncio.gather(
+            core_config.packages_include(Slow(result="invalid")),
+            core_config.packages_include(Slow()),
+            return_exceptions=True,
+        )
+
+    first, second = asyncio.run(both())
+    assert isinstance(first, OpError) and second == "added"
+    assert "packages: !include_dir_named packages" in (root / "configuration.yaml").read_text()

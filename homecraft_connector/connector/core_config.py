@@ -81,6 +81,7 @@ def _write(text: str) -> None:
     tmp = path.with_name(FILE + files.TMP_SUFFIX)
     tmp.unlink(missing_ok=True)
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode)
+    os.fchmod(fd, mode)  # past the umask
     try:
         with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
             f.write(text)
@@ -104,7 +105,15 @@ async def _check(http) -> str | None:
     return f"HTTP {reply['status']}"
 
 
+_lock = asyncio.Lock()  # one at a time: a restore must never undo another call's include
+
+
 async def packages_include(http) -> str:
+    async with _lock:
+        return await _packages_include(http)
+
+
+async def _packages_include(http) -> str:
     """`present` or `added`; `http.core(method, path)` calls HA's REST API."""
     text = await asyncio.to_thread(_read)
     if PACKAGES_RE.search(text):
