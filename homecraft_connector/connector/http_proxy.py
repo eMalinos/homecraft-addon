@@ -94,6 +94,11 @@ class HttpProxy:
         self._session = session
         self._flows: dict[str, str] = {}  # config flows this connection started -> handler
 
+    async def core(self, method: str, path: str) -> dict:
+        """A core REST call the agent makes itself (config.packages_include), not
+        one Homecraft asked for: no allowlist."""
+        return await self._forward("core", method, path, {}, None)
+
     async def handle(self, req: dict) -> dict:
         method, path = req["method"], req["path"]
         if not isinstance(method, str):

@@ -103,6 +103,13 @@ InfluxDB a Grafana), několik REST adres (kontrola konfigurace, integrace
 InfluxDB) a soubory jen v `packages/`, `custom_templates/` a `themes/`
 (`configuration.yaml` jen ke čtení). Cokoli jiného odmítne s chybou `not_allowed`.
 
+Jediná změna `configuration.yaml`: když v něm chybí načítání balíčků, doplněk sám
+přidá do bloku `homeassistant:` řádek `packages: !include_dir_named packages`
+(Homecraft posílá jen příkaz, žádný obsah), nechá konfiguraci zkontrolovat
+Home Assistantem a když neprojde, vrátí soubor do původního stavu. Pokud
+`homeassistant:` není obyčejný blok (`!include`, `{...}`) nebo už má vlastní
+`packages:`, nezmění nic.
+
 ## Bezpečnost
 
 **Kam** (allowlist, viz výše) a **co**: doplněk před zápisem zkontroluje obsah
@@ -171,8 +178,9 @@ ve vlastním podprofilu a jádro HA OS mu dovolí jen:
 
 - Python a jeho knihovny, kód doplňku (`/app`) jen ke čtení;
 - `/data` (identita, token, stav, audit, `options.json`);
-- `configuration.yaml` ke čtení a `packages/`, `custom_templates/`, `themes/`
-  ke čtení i zápisu;
+- `configuration.yaml` ke čtení i zápisu (zapisuje ho jen doplnění načítání
+  balíčků, viz výše) a `packages/`, `custom_templates/`, `themes/` ke čtení
+  i zápisu;
 - síť (Homecraft, Supervisor, Home Assistant) a certifikáty a DNS v `/etc`.
 
 Odepřeno je vše ostatní, hlavně spuštění shellu nebo jiného programu, zápis do

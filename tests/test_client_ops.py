@@ -101,3 +101,13 @@ def test_oversized_push_keeps_only_the_ha_error():
     msg = {"op": "ws.msg", "session": "s", "msg": {"id": 4, "type": "result", "result": "x"}}
     assert client._oversized(msg)["msg"]["error"]["code"] == "too_large"
     assert client._oversized({"op": "ws.msg", "session": "s", "msg": {"type": "event"}}) is None
+
+
+def test_packages_include_op(tmp_path, monkeypatch):
+    (tmp_path / "configuration.yaml").write_text(
+        "homeassistant:\n  packages: !include_dir_named packages\n"
+    )
+    monkeypatch.setattr(settings, "CONFIG_ROOT", tmp_path)
+    got = run_against_homecraft([{"id": 1, "op": "config.packages_include"}], expect=1)
+    assert got == [{"id": 1, "ok": True, "result": "present"}]
+    assert client._audit_target({"op": "config.packages_include"}) == "configuration.yaml"

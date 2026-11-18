@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.9.0
+
+- Když v `configuration.yaml` chybí načítání balíčků, doplní ho Použít přes
+  doplněk: doplněk sám přidá do bloku `homeassistant:` řádek
+  `packages: !include_dir_named packages`, nechá Home Assistant zkontrolovat
+  konfiguraci a při chybě vrátí původní soubor. Homecraft do
+  `configuration.yaml` nic jiného zapsat nemůže (žádný volný zápis), soubor
+  zůstává pro Homecraft jen ke čtení.
+
 ## 0.8.1
 
 - Homecraft smí přes Použít založit i integrace z knihovny: **Speedtest.net**,

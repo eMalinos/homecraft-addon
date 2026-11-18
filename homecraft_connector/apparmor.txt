@@ -73,9 +73,10 @@ profile homecraft_connector flags=(attach_disconnected,mediate_deleted,complain)
     # options.json and their *.tmp files
     /data/{,**} rw,
 
-    # HA config: configuration.yaml read-only, three directories rw with
-    # *.hfb-tmp files renamed over the target (connector/files.py)
-    /homeassistant/configuration.yaml r,
+    # HA config: three directories rw with *.hfb-tmp files renamed over the
+    # target (connector/files.py); configuration.yaml rw only for the packages
+    # include (connector/core_config.py, never a write Homecraft sends)
+    /homeassistant/configuration.yaml{,.hfb-tmp} rw,
     /homeassistant/{packages,custom_templates,themes}/{,**} rw,
 
     # Explicit denies win over any allow rule, in complain mode too.
