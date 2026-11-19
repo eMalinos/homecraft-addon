@@ -76,7 +76,46 @@ WS_ALLOWED = [
     sup("/addons/a0d7b954_influxdb/start", "post"),
     sup("/addons/a0d7b954_grafana/start", "post"),
     sup("/ingress/session", "post"),
+    {
+        "id": 5,
+        "type": "lovelace/resources/create",
+        "res_type": "module",
+        "url": "/local/homecraft/heating-card.js?v=0.2.0",
+    },
+    {
+        "type": "lovelace/resources/update",
+        "resource_id": "abc",
+        "res_type": "module",
+        "url": "/local/homecraft/heating-card.js?v=0.3.0",
+    },
+    {"type": "lovelace/resources/delete", "resource_id": "abc"},
+    svc(
+        "persistent_notification",
+        "create",
+        service_data={
+            "notification_id": "homecraft_card_update_heating-card",
+            "title": "Homecraft",
+            "message": "Heating Card 0.3.0 je připravená.",
+        },
+    ),
+    svc(
+        "persistent_notification",
+        "dismiss",
+        service_data={"notification_id": "homecraft_card_update_heating-card"},
+    ),
 ]
+
+
+def res(url="/local/homecraft/heating-card.js?v=0.2.0", type_="create", **extra):
+    msg = {"type": f"lovelace/resources/{type_}", "res_type": "module", "url": url, **extra}
+    return {k: v for k, v in msg.items() if v is not None}
+
+
+def note(service="create", **data):
+    base = {"notification_id": "homecraft_x", "message": "m"}
+    data = {k: v for k, v in {**base, **data}.items() if v is not None}
+    return svc("persistent_notification", service, service_data=data)
+
 
 WS_REFUSED = [
     None,
@@ -139,6 +178,29 @@ WS_REFUSED = [
     sup("/host/reboot", "post"),
     sup("/backups", "get"),
     sup("/addons/a0d7b954_nodered/info/../../core_ssh"),
+    res("https://evil.example/x.js"),
+    res("/local/other.js"),
+    res("/local/homecraft/heating-card.js"),
+    res("/local/homecraft/heating-card.js?v=0.2.0&x=1"),
+    res("/local/homecraft/../x.js?v=1.0.0"),
+    res("/local/homecraft/heating-card.js?v=\u0661.0.0"),
+    res(res_type="js"),
+    res(extra="x"),
+    res(type_="update", url=None, resource_id="abc"),
+    res(type_="update"),
+    {"type": "lovelace/resources/delete", "resource_id": 1},
+    note(notification_id="other"),
+    note(notification_id="homecraft"),
+    note(notification_id="Homecraft_x"),
+    note(notification_id=None),
+    {**note(), "target": {"entity_id": "x"}},
+    note(data="x"),
+    note(message=None),
+    note(message=1),
+    svc("persistent_notification", "dismiss_all"),
+    svc("persistent_notification", []),
+    svc("automation", []),
+    {**note(), "return_response": True},
 ]
 
 
@@ -300,6 +362,9 @@ FILES = [
     ("delete", "themes/hfb.yaml", True),
     ("list", "packages", True),
     ("list", "themes/sub", True),
+    ("write", "www/homecraft/heating-card.js", True),
+    ("delete", "www/homecraft/heating-schedule-card.js", True),
+    ("list", "www/homecraft", True),
     # refused
     ("write", "configuration.yaml", False),
     ("delete", "configuration.yaml", False),
@@ -317,6 +382,17 @@ FILES = [
     ("list", ".storage", False),
     ("chmod", "packages/x.yaml", False),
     ("read", None, False),
+    ("write", "www/other.js", False),
+    ("write", "www/homecraft/x.html", False),
+    ("write", "www/homecraft/../secrets.yaml", False),
+    ("write", "www/homecraft/sub/x.js", False),
+    ("write", "www/homecraft/Heating.js", False),
+    ("write", "www/homecraft/.js", False),
+    ("write", "www/homecraft/x.js.hfb-tmp", False),
+    ("read", "www/homecraft/heating-card.js", False),
+    ("list", "www", False),
+    ("write", "www/homecraft", False),
+    ("delete", "www/homecraft", False),
 ]
 
 

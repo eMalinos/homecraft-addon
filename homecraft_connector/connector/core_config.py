@@ -68,8 +68,8 @@ def _read() -> str:
     path = _path()
     if not path.is_file():
         raise policy.OpError("not_found", FILE)
-    if path.stat().st_size > files.MAX_READ:
-        raise policy.OpError("too_large", f"{FILE} is over {files.MAX_READ} bytes")
+    if path.stat().st_size > files.MAX_FILE:
+        raise policy.OpError("too_large", f"{FILE} is over {files.MAX_FILE} bytes")
     with open(path, encoding="utf-8", newline="") as f:  # keeps CRLF
         return f.read()
 

@@ -35,11 +35,46 @@ def test_refused(root):
         (files.write, ("../secrets.yaml", "x")),
         (files.write, ("configuration.yaml", "x")),
         (files.read, ("secrets.yaml",)),
+        (files.write, ("www/other.js", "x")),
     ]:
         with pytest.raises(OpError) as e:
             op(*args)
         assert e.value.code == "not_allowed"
     assert not (root / "custom_components").exists()
+    assert not (root / "www").exists()
+
+
+def test_card_write_creates_www(root):
+    path = "www/homecraft/heating-card.js"
+    assert files.write(path, "x" * 600_000) == "www_created"
+    assert files.write(path, "y") is None
+    assert files.list_dir("www/homecraft") == ["heating-card.js"]  # no leftover .hfb-tmp
+    assert (root / path).read_text() == "y"
+    files.delete(path)
+    assert files.list_dir("www/homecraft") == []
+    assert files.write("packages/x.yaml", "a: 1\n") is None
+
+
+def test_card_dir_symlink_out_of_root(root, tmp_path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (root / "www").mkdir()
+    (root / "www" / "homecraft").symlink_to(outside)
+    with pytest.raises(OpError) as e:
+        files.write("www/homecraft/heating-card.js", "x")
+    assert e.value.code == "not_allowed"
+    assert list(outside.iterdir()) == []
+
+
+def test_write_too_large(root):
+    big = "x" * (files.MAX_FILE + 1)
+    with pytest.raises(OpError) as e:
+        files.write("packages/x.yaml", big)
+    assert e.value.code == "too_large"
+    assert not (root / "packages" / "x.yaml").exists()
+    with pytest.raises(OpError) as e:
+        files.write("custom_components/x.py", big)
+    assert e.value.code == "not_allowed"  # the path first, at any size
 
 
 def test_symlink_out_of_root(root, tmp_path):
