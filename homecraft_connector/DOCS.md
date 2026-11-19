@@ -106,7 +106,8 @@ InfluxDB) a soubory jen v `packages/`, `custom_templates/` a `themes/`
 Vlastní karty Homecraftu: doplněk smí zapsat a smazat soubory
 `www/homecraft/<id>.js` (první zápis založí i chybějící `www/`), vytvořit
 a změnit zdroje Lovelace jen s adresou `/local/homecraft/<id>.js?v=<verze>`
-(typ `module`) a smazat kterýkoli zdroj Lovelace (převzetí karty z HACS nebo
+(typ `module`; změnit jen zdroj, který už na kartu Homecraftu ukazuje)
+a smazat kterýkoli zdroj Lovelace (převzetí karty z HACS nebo
 ruční kopie). Oznámení v Home Assistantu smí vytvořit a zrušit jen s ID
 `homecraft_…`. Nic jiného ve `www/` ani ve zdrojích Lovelace nesmí.
 

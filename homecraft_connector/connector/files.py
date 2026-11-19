@@ -22,7 +22,7 @@ def write_private(path: Path, data: bytes) -> None:
 TMP_SUFFIX = ".hfb-tmp"
 # Bounds reads and writes (memory); JSON escaping can still grow it, so
 # client.send checks the frame.
-MAX_READ = 9 * 1024 * 1024
+MAX_FILE = 9 * 1024 * 1024
 
 
 def _target(op: str, path: object) -> Path:
@@ -44,8 +44,8 @@ def read(path: str) -> str | None:
     target = _target("read", path)
     if not target.is_file():
         return None
-    if target.stat().st_size > MAX_READ:
-        raise policy.OpError("too_large", f"{path} is over {MAX_READ} bytes")
+    if target.stat().st_size > MAX_FILE:
+        raise policy.OpError("too_large", f"{path} is over {MAX_FILE} bytes")
     return target.read_text(encoding="utf-8")
 
 
@@ -54,11 +54,13 @@ def write(path: str, text: str) -> str | None:
     www/ that existed at its start), else None."""
     if not isinstance(text, str):
         raise TypeError("text must be a string")
-    if len(text.encode("utf-8")) > MAX_READ:
-        raise policy.OpError("too_large", f"{path} is over {MAX_READ} bytes")
-    target = _target("write", path)
+    target = _target("write", path)  # first: a forbidden path is not_allowed at any size
+    data = text.encode("utf-8")
+    if len(data) > MAX_FILE:
+        raise policy.OpError("too_large", f"{path} is over {MAX_FILE} bytes")
     _check_content(path, target, text)
-    created_www = path.startswith("www/") and not (settings.CONFIG_ROOT.resolve() / "www").is_dir()
+    www = settings.CONFIG_ROOT.resolve() / PurePosixPath(policy.CARD_DIR).parts[0]
+    created_www = path.startswith(policy.CARD_DIR + "/") and not www.is_dir()
     target.parent.mkdir(parents=True, exist_ok=True)
     tmp = target.with_name(target.name + TMP_SUFFIX)
     try:
@@ -71,8 +73,8 @@ def write(path: str, text: str) -> str | None:
         tmp.unlink()
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(text)
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
         os.replace(tmp, target)
     except BaseException:
         tmp.unlink(missing_ok=True)

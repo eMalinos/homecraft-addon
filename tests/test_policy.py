@@ -198,6 +198,8 @@ WS_REFUSED = [
     note(message=None),
     note(message=1),
     svc("persistent_notification", "dismiss_all"),
+    svc("persistent_notification", []),
+    svc("automation", []),
     {**note(), "return_response": True},
 ]
 

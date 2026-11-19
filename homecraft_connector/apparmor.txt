@@ -80,7 +80,7 @@ profile homecraft_connector flags=(attach_disconnected,mediate_deleted,complain)
     /homeassistant/configuration.yaml{,.hfb-tmp} rw,
     /homeassistant/{packages,custom_templates,themes}/{,**} rw,
     # Homecraft's cards (#731): www/ itself only to create it, files only in www/homecraft/
-    /homeassistant/www/ rw,
+    /homeassistant/www/ w,
     /homeassistant/www/homecraft/{,**} rw,
 
     # Explicit denies win over any allow rule, in complain mode too.

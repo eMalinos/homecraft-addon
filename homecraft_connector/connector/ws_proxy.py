@@ -140,6 +140,12 @@ class Sessions:
             error = ha_error(msg.get("id"), e.code, e.message)
             await self._push({"op": "ws.msg", "session": sid, "msg": error})
             return e.code
+        if msg["type"] == "lovelace/resources/update" and not await self._own_resource(msg):
+            logger.info("Odmítnuto: ws lovelace/resources/update %s", msg.get("resource_id"))
+            what = "lovelace/resources/update of a resource not Homecraft's own card"
+            error = ha_error(msg.get("id"), "not_allowed", f"{what} is not allowed")
+            await self._push({"op": "ws.msg", "session": sid, "msg": error})
+            return "not_allowed"
         await entry[0].send_json(msg)
         return None
 
@@ -231,21 +237,34 @@ class Sessions:
         config = msg.get("config")
         if not await asyncio.to_thread(content.check_dashboard, config):
             return None
+        reply = await self._query({"type": "lovelace/config", "url_path": msg.get("url_path")})
+        live = reply.get("result") if reply.get("success") else None  # none yet: whole
+        return await asyncio.to_thread(content.check_dashboard, config, live)
+
+    async def _own_resource(self, msg: dict) -> bool:
+        """An update may only touch a resource that already points at one of
+        Homecraft's own cards (#731); deleting any stays allowed (#733)."""
+        reply = await self._query({"type": "lovelace/resources"})
+        resources = reply.get("result") if reply.get("success") else None
+        for r in resources if isinstance(resources, list) else ():
+            if isinstance(r, dict) and r.get("id") == msg.get("resource_id"):
+                url = r.get("url")
+                return isinstance(url, str) and bool(policy.OWN_CARD_URL_RE.fullmatch(url))
+        return False
+
+    async def _query(self, cmd: dict) -> dict:
+        """One command over a session of its own, its result message."""
         ws = await self._connect()
         try:
-            await ws.send_json(
-                {"id": 1, "type": "lovelace/config", "url_path": msg.get("url_path")}
-            )
+            await ws.send_json({"id": 1, **cmd})
             while True:
                 reply = await ws.receive_json(timeout=AUTH_TIMEOUT)
                 if isinstance(reply, dict) and reply.get("id") == 1:
-                    break
+                    return reply
         except (TimeoutError, aiohttp.ClientError, TypeError, ValueError) as e:
             raise policy.OpError("ha_unreachable", type(e).__name__) from None
         finally:
             await ws.close()
-        live = reply.get("result") if reply.get("success") else None  # none yet: whole
-        return await asyncio.to_thread(content.check_dashboard, config, live)
 
     async def close(self, sid: str) -> None:
         entry = self._open.pop(sid, None)

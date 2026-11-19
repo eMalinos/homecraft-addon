@@ -67,10 +67,14 @@ def test_card_dir_symlink_out_of_root(root, tmp_path):
 
 
 def test_write_too_large(root):
+    big = "x" * (files.MAX_FILE + 1)
     with pytest.raises(OpError) as e:
-        files.write("packages/x.yaml", "x" * (files.MAX_READ + 1))
+        files.write("packages/x.yaml", big)
     assert e.value.code == "too_large"
     assert not (root / "packages" / "x.yaml").exists()
+    with pytest.raises(OpError) as e:
+        files.write("custom_components/x.py", big)
+    assert e.value.code == "not_allowed"  # the path first, at any size
 
 
 def test_symlink_out_of_root(root, tmp_path):

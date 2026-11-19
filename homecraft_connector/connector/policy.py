@@ -139,7 +139,7 @@ def _schedule_edit_allowed(data: object) -> bool:
     return True
 
 
-def _notification_allowed(service: object, msg: dict) -> bool:
+def _notification_allowed(service: str, msg: dict) -> bool:
     fields, data = NOTIFICATION_FIELDS.get(service), msg.get("service_data")
     if fields is None or not set(msg) <= {"id", "type", "domain", "service", "service_data"}:
         return False
@@ -187,6 +187,8 @@ def ws_allowed(msg: object) -> bool:
     if t == "call_service":
         domain, service = msg.get("domain"), msg.get("service")
         if not (isinstance(domain, str) and re.fullmatch(r"[a-z0-9_]+", domain)):
+            return False
+        if not isinstance(service, str):
             return False
         if domain == "persistent_notification":
             return _notification_allowed(service, msg)
@@ -351,7 +353,10 @@ READ_ONLY_FILES = frozenset({"configuration.yaml"})
 CARD_DIR = "www/homecraft"
 _CARD_ID = r"[a-z0-9]+(?:-[a-z0-9]+)*"
 CARD_FILE_RE = re.compile(rf"www/homecraft/{_CARD_ID}\.js")
-CARD_URL_RE = re.compile(rf"/local/homecraft/{_CARD_ID}\.js\?v=[0-9]+\.[0-9]+\.[0-9]+")
+_CARD_VERSION = r"\?v=[0-9]+\.[0-9]+\.[0-9]+"
+CARD_URL_RE = re.compile(rf"/local/homecraft/{_CARD_ID}\.js{_CARD_VERSION}")
+# What a resource may point at for Homecraft to update it (ws_proxy checks the live one).
+OWN_CARD_URL_RE = re.compile(rf"/local/homecraft/{_CARD_ID}\.js(?:{_CARD_VERSION})?")
 
 
 def file_allowed(op: str, path: object) -> bool:

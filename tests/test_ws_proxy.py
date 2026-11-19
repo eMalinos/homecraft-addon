@@ -13,6 +13,11 @@ from connector import ha_token, http_proxy, policy, settings, ws_proxy
 from connector.policy import OpError
 
 DASHBOARDS: dict[str, dict] = {}  # url_path -> live config (lovelace/config)
+RESOURCES = [  # lovelace/resources
+    {"id": "own", "type": "module", "url": "/local/homecraft/heating-card.js?v=0.2.0"},
+    {"id": "own2", "type": "module", "url": "/local/homecraft/energy-card.js"},
+    {"id": "hacs", "type": "module", "url": "/hacsfiles/heating-card/heating-card.js?hacstag=1"},
+]
 
 
 @contextlib.asynccontextmanager
@@ -39,6 +44,8 @@ async def fake_ha(monkeypatch, token="t0k"):
             result = (
                 DASHBOARDS.get(cmd.get("url_path"), 1) if cmd["type"] == "lovelace/config" else 1
             )
+            if cmd["type"] == "lovelace/resources":
+                result = RESOURCES
             await ws.send_json(
                 {"id": cmd["id"], "type": "result", "success": True, "result": result}
             )
@@ -369,6 +376,36 @@ def test_dashboard_save_with_a_forbidden_action_is_refused(monkeypatch):
             await sessions.send(sid, msg)
             await _until(pushed, 3)
             assert pushed[-1]["msg"] == {"id": 3, "type": "result", "success": True, "result": 1}
+            await sessions.close_all()
+
+    asyncio.run(scenario())
+
+
+def test_resource_update_only_of_own_cards(monkeypatch):
+    async def scenario():
+        async with fake_ha(monkeypatch) as (seen, _), aiohttp.ClientSession() as http:
+            pushed: list[dict] = []
+
+            async def push(data):
+                pushed.append(data)
+
+            sessions = ws_proxy.Sessions(http, push)
+            sid = (await sessions.open())["session"]
+            url = "/local/homecraft/heating-card.js?v=0.3.0"
+            for i, rid in enumerate(("own", "own2", "hacs", "missing"), 1):
+                msg = {"id": i, "type": "lovelace/resources/update", "resource_id": rid}
+                await sessions.send(sid, {**msg, "res_type": "module", "url": url})
+            await sessions.send(
+                sid, {"id": 5, "type": "lovelace/resources/delete", "resource_id": "hacs"}
+            )
+            await _until(pushed, 5)
+            replies = {p["msg"]["id"]: p["msg"] for p in pushed}
+            assert replies[1]["success"] is True and replies[2]["success"] is True
+            assert replies[3]["error"]["code"] == "not_allowed"
+            assert replies[4]["error"]["code"] == "not_allowed"
+            assert replies[5]["success"] is True
+            updated = [c["resource_id"] for c in seen if c["type"] == "lovelace/resources/update"]
+            assert updated == ["own", "own2"]
             await sessions.close_all()
 
     asyncio.run(scenario())
