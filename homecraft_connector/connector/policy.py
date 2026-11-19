@@ -79,6 +79,12 @@ RELOAD_SERVICES = frozenset(
 # scheduler.edit (schedules.swap_schedule) rewrites a valve's schedules; the
 # heating-schedule-card writes only this service into their actions.
 SCHEDULE_SERVICES = frozenset({"climate.set_temperature"})
+# #746 card update notices: only Homecraft's own notifications, only these fields.
+NOTIFICATION_ID_RE = re.compile(r"homecraft_[a-z0-9_-]+")
+NOTIFICATION_FIELDS = {
+    "create": {"notification_id", "message", "title"},
+    "dismiss": {"notification_id"},
+}
 
 # Add-ons features reach (library `"type": "addon"`); the ones with
 # `install: true` may also be installed and started (addon_install).
@@ -133,6 +139,29 @@ def _schedule_edit_allowed(data: object) -> bool:
     return True
 
 
+def _notification_allowed(service: object, msg: dict) -> bool:
+    fields, data = NOTIFICATION_FIELDS.get(service), msg.get("service_data")
+    if fields is None or not set(msg) <= {"id", "type", "domain", "service", "service_data"}:
+        return False
+    if not isinstance(data, dict) or not set(data) <= fields:
+        return False
+    if not all(isinstance(v, str) for v in data.values()):
+        return False
+    nid = data.get("notification_id")
+    return bool(nid and NOTIFICATION_ID_RE.fullmatch(nid)) and (
+        service == "dismiss" or "message" in data
+    )
+
+
+def _card_resource_allowed(msg: dict, keys: set[str]) -> bool:
+    """A Lovelace resource of Homecraft's own cards: a module at CARD_URL_RE."""
+    if not set(msg) <= {"id", "type", *keys} or msg.get("res_type") != "module":
+        return False
+    if not (isinstance(url := msg.get("url"), str) and CARD_URL_RE.fullmatch(url)):
+        return False
+    return "resource_id" not in keys or isinstance(msg.get("resource_id"), str)
+
+
 def ws_allowed(msg: object) -> bool:
     if not isinstance(msg, dict) or not isinstance(t := msg.get("type"), str):
         return False
@@ -149,10 +178,18 @@ def ws_allowed(msg: object) -> bool:
         )
     if t == "lovelace/dashboards/create":
         return msg.get("url_path") == OWN_DASHBOARD
+    if t == "lovelace/resources/create":
+        return _card_resource_allowed(msg, {"res_type", "url"})
+    if t == "lovelace/resources/update":
+        return _card_resource_allowed(msg, {"resource_id", "res_type", "url"})
+    if t == "lovelace/resources/delete":  # #733: also a HACS or hand-copied resource
+        return set(msg) <= {"id", "type", "resource_id"} and isinstance(msg.get("resource_id"), str)
     if t == "call_service":
         domain, service = msg.get("domain"), msg.get("service")
         if not (isinstance(domain, str) and re.fullmatch(r"[a-z0-9_]+", domain)):
             return False
+        if domain == "persistent_notification":
+            return _notification_allowed(service, msg)
         if (domain, service) == ("scheduler", "edit"):
             return _schedule_edit_allowed(msg.get("service_data"))
         return service in RELOAD_SERVICES and "service_data" not in msg and "target" not in msg
@@ -309,6 +346,12 @@ def flow_step_host(body: bytes | None) -> str | None | bool:
 
 FILE_DIRS = ("packages", "custom_templates", "themes")  # config_file_applicator._DIRS
 READ_ONLY_FILES = frozenset({"configuration.yaml"})
+# Homecraft's own cards (#731): written as www/homecraft/<id>.js, loaded as the
+# Lovelace resource /local/homecraft/<id>.js?v=<version> (the version busts the cache).
+CARD_DIR = "www/homecraft"
+_CARD_ID = r"[a-z0-9]+(?:-[a-z0-9]+)*"
+CARD_FILE_RE = re.compile(rf"www/homecraft/{_CARD_ID}\.js")
+CARD_URL_RE = re.compile(rf"/local/homecraft/{_CARD_ID}\.js\?v=[0-9]+\.[0-9]+\.[0-9]+")
 
 
 def file_allowed(op: str, path: object) -> bool:
@@ -318,6 +361,10 @@ def file_allowed(op: str, path: object) -> bool:
     parts = PurePosixPath(path).parts
     if any(p in ("", ".", "..") for p in path.split("/")):
         return False
+    if path == CARD_DIR:
+        return op == "list"
+    if CARD_FILE_RE.fullmatch(path):
+        return op in ("write", "delete")
     if op == "read" and path in READ_ONLY_FILES:
         return True
     if op not in ("read", "write", "delete", "list") or parts[0] not in FILE_DIRS:

@@ -2,7 +2,7 @@
 
 # Second line of defence under the allowlist (connector/policy.py): even code
 # running inside the agent cannot start a shell or touch HA files outside
-# packages/, custom_templates/ and themes/.
+# packages/, custom_templates/, themes/ and www/homecraft/.
 # The Supervisor renames the top-level profile to the add-on's full slug
 # (<repo hash>_homecraft_connector). Every new feature that touches new paths
 # or programs must extend this file (DOCS.md, Bezpečnost).
@@ -73,11 +73,15 @@ profile homecraft_connector flags=(attach_disconnected,mediate_deleted,complain)
     # options.json and their *.tmp files
     /data/{,**} rw,
 
-    # HA config: three directories rw with *.hfb-tmp files renamed over the
-    # target (connector/files.py); configuration.yaml rw only for the packages
-    # include (connector/core_config.py, never a write Homecraft sends)
+    # HA config: three directories and www/homecraft/ rw with *.hfb-tmp files
+    # renamed over the target (connector/files.py); configuration.yaml rw only
+    # for the packages include (connector/core_config.py, never a write
+    # Homecraft sends)
     /homeassistant/configuration.yaml{,.hfb-tmp} rw,
     /homeassistant/{packages,custom_templates,themes}/{,**} rw,
+    # Homecraft's cards (#731): www/ itself only to create it, files only in www/homecraft/
+    /homeassistant/www/ rw,
+    /homeassistant/www/homecraft/{,**} rw,
 
     # Explicit denies win over any allow rule, in complain mode too.
     deny /homeassistant/**secrets.yaml rw,

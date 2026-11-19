@@ -103,6 +103,13 @@ InfluxDB a Grafana), několik REST adres (kontrola konfigurace, integrace
 InfluxDB) a soubory jen v `packages/`, `custom_templates/` a `themes/`
 (`configuration.yaml` jen ke čtení). Cokoli jiného odmítne s chybou `not_allowed`.
 
+Vlastní karty Homecraftu: doplněk smí zapsat a smazat soubory
+`www/homecraft/<id>.js` (první zápis založí i chybějící `www/`), vytvořit
+a změnit zdroje Lovelace jen s adresou `/local/homecraft/<id>.js?v=<verze>`
+(typ `module`) a smazat kterýkoli zdroj Lovelace (převzetí karty z HACS nebo
+ruční kopie). Oznámení v Home Assistantu smí vytvořit a zrušit jen s ID
+`homecraft_…`. Nic jiného ve `www/` ani ve zdrojích Lovelace nesmí.
+
 Jediná změna `configuration.yaml`: když v něm chybí načítání balíčků, doplněk sám
 přidá do bloku `homeassistant:` řádek `packages: !include_dir_named packages`
 (Homecraft posílá jen příkaz, žádný obsah), nechá konfiguraci zkontrolovat
@@ -139,6 +146,10 @@ a nastavení je nerozšíří. Je to denylist: díru zužuje, nezavírá (viz li
 - **`themes/`**: kód nespouští (CSS proměnné), ale loader HA v nich tagy
   vyhodnocuje, proto se odmítnou stejné tagy. `custom_templates/` jsou soubory
   Jinja, ne YAML. Soubor `secrets.yaml` nelze zapsat nikam.
+- **`www/homecraft/`**: obsah se nekontroluje, je to JavaScript karet
+  Homecraftu a běží v prohlížeči každého uživatele HA. Soubory ve `www/` jsou
+  přes `/local/` dostupné bez přihlášení: kdo zná adresu, stáhne JS karty i bez
+  účtu v HA (i když budou repozitáře karet soukromé).
 - **Automatizace a skripty přes REST** projdou stejnou kontrolou, ale proti
   živé konfiguraci stejného id: odmítne se jen zakázaná akce, kterou tam
   uživatel ještě nemá (přejmenování entity v jeho automatizaci projde).
@@ -181,6 +192,7 @@ ve vlastním podprofilu a jádro HA OS mu dovolí jen:
 - `configuration.yaml` ke čtení i zápisu (zapisuje ho jen doplnění načítání
   balíčků, viz výše) a `packages/`, `custom_templates/`, `themes/` ke čtení
   i zápisu;
+- `www/homecraft/` ke čtení i zápisu a `www/` samotný jen kvůli jeho založení;
 - síť (Homecraft, Supervisor, Home Assistant) a certifikáty a DNS v `/etc`.
 
 Odepřeno je vše ostatní, hlavně spuštění shellu nebo jiného programu, zápis do
@@ -206,6 +218,8 @@ program, musí ve stejném PR upravit `apparmor.txt` a ověřit ho na HA OS
 - JavaScript v šablonách vlastních karet dashboardu (`[[[ ]]]` v button-card,
   HTML karty) se nekontroluje.
 - Šablony Jinja v YAML se nekontrolují (běží v sandboxu HA).
+- Kompromitovaný Homecraft může doručit JavaScript, který poběží v prohlížeči
+  uživatelů HA (vlastní karty jinak nasadit nejdou).
 
 ## Log při startu (self-check)
 

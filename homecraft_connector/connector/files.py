@@ -20,7 +20,8 @@ def write_private(path: Path, data: bytes) -> None:
 # --- file.* operations under HA's config directory (#555) -------------------
 
 TMP_SUFFIX = ".hfb-tmp"
-# Bounds memory; JSON escaping can still grow it, so client.send checks the frame.
+# Bounds reads and writes (memory); JSON escaping can still grow it, so
+# client.send checks the frame.
 MAX_READ = 9 * 1024 * 1024
 
 
@@ -48,11 +49,16 @@ def read(path: str) -> str | None:
     return target.read_text(encoding="utf-8")
 
 
-def write(path: str, text: str) -> None:
+def write(path: str, text: str) -> str | None:
+    """ "www_created" when it had to create www/ (HA serves /local only for a
+    www/ that existed at its start), else None."""
     if not isinstance(text, str):
         raise TypeError("text must be a string")
+    if len(text.encode("utf-8")) > MAX_READ:
+        raise policy.OpError("too_large", f"{path} is over {MAX_READ} bytes")
     target = _target("write", path)
     _check_content(path, target, text)
+    created_www = path.startswith("www/") and not (settings.CONFIG_ROOT.resolve() / "www").is_dir()
     target.parent.mkdir(parents=True, exist_ok=True)
     tmp = target.with_name(target.name + TMP_SUFFIX)
     try:
@@ -71,6 +77,7 @@ def write(path: str, text: str) -> None:
     except BaseException:
         tmp.unlink(missing_ok=True)
         raise
+    return "www_created" if created_www else None
 
 
 def _check_content(path: str, target: Path, text: str) -> None:
@@ -82,7 +89,9 @@ def _check_content(path: str, target: Path, text: str) -> None:
         what = content.check_yaml(path, text)
     elif "themes" in dirs:  # loaded through HA's YAML loader too (tags)
         what = content.check_tags(text)
-    else:  # custom_templates/: Jinja files, not YAML
+    # custom_templates/ (Jinja, not YAML) and www/homecraft/*.js (Homecraft's own
+    # cards, #731): no content check
+    else:
         what = None
     if what:
         raise content.refused(path, what)

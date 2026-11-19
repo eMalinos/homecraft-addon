@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.10.0
+
+- Homecraft smí přes Použít nainstalovat a aktualizovat své karty (soubory
+  `www/homecraft/<id>.js`, zdroje Lovelace `/local/homecraft/…`) a posílat
+  oznámení o nových verzích karet (jen s ID `homecraft_…`). Nic jiného ve
+  `www/` ani ve zdrojích Lovelace nesmí; smazat smí kterýkoli zdroj Lovelace
+  (převzetí karty z HACS).
+- Zápis souboru nad 9 MiB se odmítne (`too_large`), stejně jako čtení.
+
 ## 0.9.0
 
 - Když v `configuration.yaml` chybí načítání balíčků, doplní ho Použít přes
