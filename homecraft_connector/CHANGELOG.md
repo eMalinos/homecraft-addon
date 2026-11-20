@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.11.0
+
+- Karty Homecraftu (`www/homecraft/<id>.js`) doplněk zapíše jen s platným
+  podpisem Homecraftu; kompromitovaný server Homecraftu tak do HA nepodstrčí
+  vlastní JavaScript.
+
 ## 0.10.0
 
 - Homecraft smí přes Použít nainstalovat a aktualizovat své karty (soubory

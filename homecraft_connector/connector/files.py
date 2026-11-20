@@ -49,9 +49,11 @@ def read(path: str) -> str | None:
     return target.read_text(encoding="utf-8")
 
 
-def write(path: str, text: str) -> str | None:
+def write(path: str, text: str, signature: object = None) -> str | None:
     """ "www_created" when it had to create www/ (HA serves /local only for a
-    www/ that existed at its start), else None."""
+    www/ that existed at its start), else None. A card (www/homecraft/<id>.js)
+    needs `signature` = a valid Homecraft signature over the written bytes
+    (#760); other files ignore it."""
     if not isinstance(text, str):
         raise TypeError("text must be a string")
     target = _target("write", path)  # first: a forbidden path is not_allowed at any size
@@ -59,6 +61,12 @@ def write(path: str, text: str) -> str | None:
     if len(data) > MAX_FILE:
         raise policy.OpError("too_large", f"{path} is over {MAX_FILE} bytes")
     _check_content(path, target, text)
+    rel = target.relative_to(settings.CONFIG_ROOT.resolve()).as_posix()
+    # By the requested and the resolved path: a link from packages/ into www/homecraft/ is a card.
+    if any(policy.CARD_FILE_RE.fullmatch(p) for p in (path, rel)) and not (
+        policy.card_signature_valid(data, signature)
+    ):
+        raise content.refused(path, "JavaScript bez platného podpisu Homecraftu")
     www = settings.CONFIG_ROOT.resolve() / PurePosixPath(policy.CARD_DIR).parts[0]
     created_www = path.startswith(policy.CARD_DIR + "/") and not www.is_dir()
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -92,7 +100,7 @@ def _check_content(path: str, target: Path, text: str) -> None:
     elif "themes" in dirs:  # loaded through HA's YAML loader too (tags)
         what = content.check_tags(text)
     # custom_templates/ (Jinja, not YAML) and www/homecraft/*.js (Homecraft's own
-    # cards, #731): no content check
+    # cards, #731): no content check; a card's signature is checked in write (#760)
     else:
         what = None
     if what:

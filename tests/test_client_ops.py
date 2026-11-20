@@ -111,3 +111,17 @@ def test_packages_include_op(tmp_path, monkeypatch):
     got = run_against_homecraft([{"id": 1, "op": "config.packages_include"}], expect=1)
     assert got == [{"id": 1, "ok": True, "result": "present"}]
     assert client._audit_target({"op": "config.packages_include"}) == "configuration.yaml"
+
+
+def test_card_write_passes_the_signature(tmp_path, monkeypatch, card_key):
+    monkeypatch.setattr(settings, "CONFIG_ROOT", tmp_path)
+    path, text = "www/homecraft/heating-card.js", "x"
+    got = run_against_homecraft(
+        [{"id": 1, "op": "file.write", "path": path, "text": text, "signature": card_key(text)}],
+        expect=1,
+    )
+    assert got == [{"id": 1, "ok": True, "result": "www_created"}]
+    got = run_against_homecraft(
+        [{"id": 2, "op": "file.write", "path": path, "text": text}], expect=1
+    )
+    assert got[0]["ok"] is False and got[0]["error"]["code"] == "refused_content"

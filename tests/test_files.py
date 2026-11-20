@@ -1,6 +1,9 @@
-import pytest
+import base64
 
-from connector import files, settings
+import pytest
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
+
+from connector import files, policy, settings
 from connector.policy import OpError
 
 
@@ -44,15 +47,70 @@ def test_refused(root):
     assert not (root / "www").exists()
 
 
-def test_card_write_creates_www(root):
+def test_card_write_creates_www(root, card_key):
     path = "www/homecraft/heating-card.js"
-    assert files.write(path, "x" * 600_000) == "www_created"
-    assert files.write(path, "y") is None
+    big = "x" * 600_000
+    assert files.write(path, big, card_key(big)) == "www_created"
+    assert files.write(path, "y", card_key("y")) is None
     assert files.list_dir("www/homecraft") == ["heating-card.js"]  # no leftover .hfb-tmp
     assert (root / path).read_text() == "y"
     files.delete(path)
     assert files.list_dir("www/homecraft") == []
     assert files.write("packages/x.yaml", "a: 1\n") is None
+
+
+def test_card_write_needs_a_valid_signature(root, card_key):
+    path, text = "www/homecraft/heating-card.js", "x"
+    other_key = Ed25519PrivateKey.generate()
+    for args in [
+        (),
+        (None,),
+        (123,),
+        ("!!",),
+        (base64.b64encode(b"\0" * 63).decode(),),
+        (card_key("y"),),
+        (base64.b64encode(other_key.sign(text.encode())).decode(),),
+    ]:
+        with pytest.raises(OpError) as e:
+            files.write(path, text, *args)
+        assert e.value.code == "refused_content"
+    assert not (root / "www").exists()
+
+
+def test_card_write_accepts_any_pinned_key(root, card_key, monkeypatch):
+    second = Ed25519PrivateKey.generate()
+    keys = (*policy.CARD_PUBLIC_KEYS, second.public_key())
+    monkeypatch.setattr(policy, "CARD_PUBLIC_KEYS", keys)
+    sig = base64.b64encode(second.sign(b"x")).decode()
+    assert files.write("www/homecraft/heating-card.js", "x", sig) == "www_created"
+
+
+def test_card_signature_tolerates_surrounding_whitespace(root, card_key):
+    assert files.write("www/homecraft/heating-card.js", "x", card_key("x") + "\n") == "www_created"
+
+
+def test_link_into_card_dir_needs_a_signature(root, card_key):
+    (root / "www" / "homecraft").mkdir(parents=True)
+    card = root / "www" / "homecraft" / "heating-card.js"
+    (root / "packages" / "x.js").symlink_to(card)
+    with pytest.raises(OpError) as e:
+        files.write("packages/x.js", "a: 1\n")
+    assert e.value.code == "refused_content"
+    assert not card.exists()
+    files.write("packages/x.js", "a: 1\n", card_key("a: 1\n"))
+    assert card.read_text() == "a: 1\n"
+
+
+def test_signature_ignored_outside_cards(root):
+    assert files.write("packages/x.yaml", "a: 1\n", "garbage") is None
+
+
+def test_pinned_keys_are_valid():
+    for key in policy.CARD_SIGNING_KEYS:
+        raw = base64.b64decode(key, validate=True)
+        assert len(raw) == 32
+        Ed25519PublicKey.from_public_bytes(raw)
+    assert len(policy.CARD_PUBLIC_KEYS) == len(policy.CARD_SIGNING_KEYS)
 
 
 def test_card_dir_symlink_out_of_root(root, tmp_path):

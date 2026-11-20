@@ -147,8 +147,12 @@ a nastavení je nerozšíří. Je to denylist: díru zužuje, nezavírá (viz li
 - **`themes/`**: kód nespouští (CSS proměnné), ale loader HA v nich tagy
   vyhodnocuje, proto se odmítnou stejné tagy. `custom_templates/` jsou soubory
   Jinja, ne YAML. Soubor `secrets.yaml` nelze zapsat nikam.
-- **`www/homecraft/`**: obsah se nekontroluje, je to JavaScript karet
-  Homecraftu a běží v prohlížeči každého uživatele HA. Soubory ve `www/` jsou
+- **`www/homecraft/`**: JavaScript karet Homecraftu běží v prohlížeči každého
+  uživatele HA, proto ho doplněk zapíše jen s platným podpisem Ed25519 klíčem
+  Homecraftu, jinak `refused_content`. Veřejné klíče jsou pevně v kódu
+  doplňku; podepisuje release workflow repozitáře karty, server Homecraftu
+  soukromý klíč nemá. Podpis se kontroluje i u cesty, která na kartu vede přes
+  symlink (např. z `packages/`). Soubory ve `www/` jsou
   přes `/local/` dostupné bez přihlášení: kdo zná adresu, stáhne JS karty i bez
   účtu v HA (i když budou repozitáře karet soukromé).
 - **Automatizace a skripty přes REST** projdou stejnou kontrolou, ale proti
@@ -219,8 +223,14 @@ program, musí ve stejném PR upravit `apparmor.txt` a ověřit ho na HA OS
 - JavaScript v šablonách vlastních karet dashboardu (`[[[ ]]]` v button-card,
   HTML karty) se nekontroluje.
 - Šablony Jinja v YAML se nekontrolují (běží v sandboxu HA).
-- Kompromitovaný Homecraft může doručit JavaScript, který poběží v prohlížeči
-  uživatelů HA (vlastní karty jinak nasadit nejdou).
+- Podpis karty kryje jen obsah, ne název a verzi: kompromitovaný Homecraft
+  může nasadit jen podepsanou kartu Homecraftu, ale i starší verzi nebo jinou
+  kartu pod jiným názvem. Ochrana platí od verze 0.11.0 (starší verze doplňku
+  zapíše jakýkoli JavaScript, aktualizujte).
+
+**Rotace klíče**: doplněk přijímá víc klíčů pro podpis karet. Nový klíč přijde
+s novou verzí doplňku, starý se odebere v některé další (při úniku hned).
+Aktualizujte doplněk, když to oznámení vydání uvádí.
 
 ## Log při startu (self-check)
 
