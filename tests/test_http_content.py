@@ -165,3 +165,46 @@ USER_AUTOMATION = {
     "actions": [{"action": "hassio.addon_restart", "data": {"addon": "x"}}],
 }
 bad_actions = [{"action": "shell_command.x"}]
+
+
+def test_local_card_head_goes_to_ha_url_without_token(monkeypatch):
+    """#16: HEAD of the card's resource on HA_URL, no Authorization; core keeps
+    CORE_HTTP_URL and the token."""
+    seen: list[tuple[str, str, str | None]] = []
+
+    async def record(request):
+        seen.append((request.method, request.path_qs, request.headers.get("Authorization")))
+        return web.Response(status=404 if "missing" in request.path else 200)
+
+    async def scenario():
+        app = web.Application()
+        app.router.add_route("*", "/{tail:.*}", record)
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        url = f"http://127.0.0.1:{site._server.sockets[0].getsockname()[1]}"
+        monkeypatch.setattr(settings, "HA_URL", url)
+        monkeypatch.setattr(settings, "CORE_HTTP_URL", url + "/core")
+        monkeypatch.setattr(settings, "SUPERVISOR_TOKEN", "t")
+        try:
+            async with aiohttp.ClientSession() as http:
+                proxy = http_proxy.HttpProxy(http)
+                card = "/local/homecraft/heating-card.js?v=0.2.0"
+                head = {"method": "HEAD", "path": card, "headers": {"Authorization": "x"}}
+                assert (await proxy.handle(head))["status"] == 200
+                missing = {"method": "HEAD", "path": "/local/homecraft/missing.js?v=1.0.0"}
+                assert (await proxy.handle(missing))["status"] == 404
+                with pytest.raises(OpError) as e:
+                    await proxy.handle({**head, "body_b64": ""})
+                assert e.value.code == "not_allowed"
+                assert (await proxy.handle({"method": "GET", "path": "/api/"}))["status"] == 200
+        finally:
+            await runner.cleanup()
+
+    asyncio.run(scenario())
+    assert seen == [
+        ("HEAD", "/local/homecraft/heating-card.js?v=0.2.0", None),
+        ("HEAD", "/local/homecraft/missing.js?v=1.0.0", None),
+        ("GET", "/core/api/", "Bearer t"),
+    ]

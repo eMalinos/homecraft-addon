@@ -44,6 +44,7 @@ WS_ALLOWED = [
     {"type": "get_config"},
     {"type": "lovelace/config/save", "config": {}},
     {"type": "lovelace/dashboards/list"},
+    {"type": "lovelace/info"},
     {"type": "lovelace/dashboards/delete", "dashboard_id": "x"},
     {"type": "lovelace/dashboards/create", "url_path": "hfb-features", "title": "Features"},
     {"type": "scheduler"},
@@ -216,6 +217,7 @@ def test_ws_refused(msg):
 
 INFLUX = json.dumps({"handler": "influxdb"}).encode()
 FLOW = "/api/config/config_entries/flow"
+CARD = "/local/homecraft/heating-card.js?v=0.2.0"
 
 HTTP = [
     ("GET", "/api/", None, ("core", "/api/", "")),
@@ -230,7 +232,13 @@ HTTP = [
     ("GET", "/api/hassio_ingress/tok_EN-1/flows", None, ("ingress", "tok_EN-1", "/flows")),
     ("POST", "/api/hassio_ingress/tok/api/config?x=1", b"", ("ingress", "tok", "/api/config")),
     ("GET", "/api/hassio_ingress/tok", None, ("ingress", "tok", "/")),
+    ("HEAD", CARD, None, ("local", CARD, "")),
     # refused
+    ("GET", CARD, None, None),
+    ("HEAD", "/local/homecraft/heating-card.js", None, None),
+    ("HEAD", "/local/other.js?v=1.0.0", None, None),
+    ("HEAD", "/local/homecraft/../x.js?v=1.0.0", None, None),
+    ("HEAD", CARD + "&x=1", None, None),
     ("POST", "/api/", None, None),
     ("GET", "/api/states", None, None),
     ("POST", "/api/services/shell_command/x", None, None),

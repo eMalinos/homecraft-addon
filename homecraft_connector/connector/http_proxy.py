@@ -1,4 +1,5 @@
-"""The `http` operation: core REST with the agent's token, add-on ingress without one."""
+"""The `http` operation: core REST with the agent's token, add-on ingress and
+HEAD of Homecraft's own card under /local without one."""
 
 import asyncio
 import base64
@@ -112,6 +113,8 @@ class HttpProxy:
         if target is None:
             raise refused
         kind, ref, subpath = target
+        if kind == "local" and body is not None:
+            raise refused
         if kind == "ingress":
             slug = await _ingress_slug(self._session, ref)
             if slug is None or not policy.ingress_allowed(slug, method, subpath):
@@ -199,7 +202,7 @@ class HttpProxy:
             for k, v in (in_headers if isinstance(in_headers, dict) else {}).items()
             if isinstance(k, str) and isinstance(v, str) and k.lower() in allowed
         }
-        if kind == "ingress":
+        if kind in ("ingress", "local"):  # never the Supervisor's token on HA_URL
             url = settings.HA_URL + path
         else:
             url = settings.CORE_HTTP_URL + path

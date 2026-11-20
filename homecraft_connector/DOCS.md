@@ -108,7 +108,10 @@ Vlastní karty Homecraftu: doplněk smí zapsat a smazat soubory
 a změnit zdroje Lovelace jen s adresou `/local/homecraft/<id>.js?v=<verze>`
 (typ `module`; změnit jen zdroj, který už na kartu Homecraftu ukazuje)
 a smazat kterýkoli zdroj Lovelace (převzetí karty z HACS nebo
-ruční kopie). Oznámení v Home Assistantu smí vytvořit a zrušit jen s ID
+ruční kopie). Smí ověřit, že HA kartu servíruje
+(`HEAD /local/homecraft/<id>.js?v=<verze>`, bez přihlášení, jiná adresa pod
+`/local/` ani `GET` ne), a přečíst `lovelace/info` (zda jsou zdroje Lovelace
+v režimu YAML, kam kartu přidat nejde). Oznámení v Home Assistantu smí vytvořit a zrušit jen s ID
 `homecraft_…`. Nic jiného ve `www/` ani ve zdrojích Lovelace nesmí.
 
 Jediná změna `configuration.yaml`: když v něm chybí načítání balíčků, doplněk sám
