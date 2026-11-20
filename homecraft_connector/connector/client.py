@@ -480,7 +480,7 @@ class _Conn:
 
 FILE_OPS = {
     "file.read": lambda r: (files.read, r["path"]),
-    "file.write": lambda r: (files.write, r["path"], r["text"]),
+    "file.write": lambda r: (files.write, r["path"], r["text"], r.get("signature")),
     "file.delete": lambda r: (files.delete, r["path"]),
     "file.list": lambda r: (files.list_dir, r["path"]),
 }

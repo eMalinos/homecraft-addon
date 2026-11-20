@@ -4,10 +4,15 @@ It lives only here, in the add-on code: never in the options, never sent by
 the server, so a compromised Homecraft cannot widen it. Least privilege: only
 what the Homecraft backend and the library features send. Pure functions, no I/O."""
 
+import base64
+import binascii
 import json
 import re
 import urllib.parse
 from pathlib import PurePosixPath
+
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 
 class OpError(Exception):
@@ -353,10 +358,34 @@ READ_ONLY_FILES = frozenset({"configuration.yaml"})
 CARD_DIR = "www/homecraft"
 _CARD_ID = r"[a-z0-9]+(?:-[a-z0-9]+)*"
 CARD_FILE_RE = re.compile(rf"www/homecraft/{_CARD_ID}\.js")
+# Ed25519 public keys (base64, raw 32 bytes) whose signature a card's JS needs
+# (#760). The card repos' release workflows sign with the private key; Homecraft's
+# server never has it. More than one = key rotation.
+CARD_SIGNING_KEYS = ("gm6vehBY3j+qyExoOmjleIOrqg/9ZRfEuSVFSmU3jmI=",)
 _CARD_VERSION = r"\?v=[0-9]+\.[0-9]+\.[0-9]+"
 CARD_URL_RE = re.compile(rf"/local/homecraft/{_CARD_ID}\.js{_CARD_VERSION}")
 # What a resource may point at for Homecraft to update it (ws_proxy checks the live one).
 OWN_CARD_URL_RE = re.compile(rf"/local/homecraft/{_CARD_ID}\.js(?:{_CARD_VERSION})?")
+
+
+def card_signature_valid(data: bytes, signature: object) -> bool:
+    """`signature`: base64 of a 64-byte Ed25519 signature over `data` by any
+    of CARD_SIGNING_KEYS."""
+    if not isinstance(signature, str):
+        return False
+    try:
+        sig = base64.b64decode(signature, validate=True)
+    except (binascii.Error, ValueError):
+        return False
+    if len(sig) != 64:
+        return False
+    for key in CARD_SIGNING_KEYS:
+        try:
+            Ed25519PublicKey.from_public_bytes(base64.b64decode(key)).verify(sig, data)
+        except InvalidSignature:
+            continue
+        return True
+    return False
 
 
 def file_allowed(op: str, path: object) -> bool:
