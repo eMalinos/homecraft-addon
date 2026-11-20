@@ -5,7 +5,6 @@ import uuid
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 from connector import audit, panel, policy, settings
 from connector.client import Client
@@ -18,16 +17,12 @@ def data_dir(tmp_path, monkeypatch):
     return tmp_path
 
 
-def raw_public_b64(key: Ed25519PrivateKey) -> str:
-    return base64.b64encode(key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)).decode()
-
-
 @pytest.fixture
 def card_key(monkeypatch):
-    """A fresh card signing key pinned as the only CARD_SIGNING_KEYS entry;
+    """A fresh card signing key pinned as the only CARD_PUBLIC_KEYS entry;
     returns sign(text) -> base64 signature."""
     key = Ed25519PrivateKey.generate()
-    monkeypatch.setattr(policy, "CARD_SIGNING_KEYS", (raw_public_b64(key),))
+    monkeypatch.setattr(policy, "CARD_PUBLIC_KEYS", (key.public_key(),))
     return lambda text: base64.b64encode(key.sign(text.encode())).decode()
 
 

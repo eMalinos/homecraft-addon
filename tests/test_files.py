@@ -1,7 +1,6 @@
 import base64
 
 import pytest
-from conftest import raw_public_b64
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 
 from connector import files, policy, settings
@@ -80,10 +79,14 @@ def test_card_write_needs_a_valid_signature(root, card_key):
 
 def test_card_write_accepts_any_pinned_key(root, card_key, monkeypatch):
     second = Ed25519PrivateKey.generate()
-    keys = (*policy.CARD_SIGNING_KEYS, raw_public_b64(second))
-    monkeypatch.setattr(policy, "CARD_SIGNING_KEYS", keys)
+    keys = (*policy.CARD_PUBLIC_KEYS, second.public_key())
+    monkeypatch.setattr(policy, "CARD_PUBLIC_KEYS", keys)
     sig = base64.b64encode(second.sign(b"x")).decode()
     assert files.write("www/homecraft/heating-card.js", "x", sig) == "www_created"
+
+
+def test_card_signature_tolerates_surrounding_whitespace(root, card_key):
+    assert files.write("www/homecraft/heating-card.js", "x", card_key("x") + "\n") == "www_created"
 
 
 def test_link_into_card_dir_needs_a_signature(root, card_key):
@@ -107,6 +110,7 @@ def test_pinned_keys_are_valid():
         raw = base64.b64decode(key, validate=True)
         assert len(raw) == 32
         Ed25519PublicKey.from_public_bytes(raw)
+    assert len(policy.CARD_PUBLIC_KEYS) == len(policy.CARD_SIGNING_KEYS)
 
 
 def test_card_dir_symlink_out_of_root(root, tmp_path):
