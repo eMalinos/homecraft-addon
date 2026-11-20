@@ -1,12 +1,12 @@
 name: Homecraft Connector
 description: Připojí Home Assistant k Homecraftu odchozím spojením (bez veřejné adresy a VPN).
-version: "0.12.0"
+version: "0.12.1"
 slug: homecraft_connector
-url: https://github.com/eMalinos/homecraft-addon
+url: https://github.com/homecraftcz/homecraft-addon
 arch:
   - aarch64
   - amd64
-image: ghcr.io/emalinos/homecraft-connector-{arch}
+image: ghcr.io/homecraftcz/homecraft-connector-{arch}
 init: false
 startup: application
 boot: auto
