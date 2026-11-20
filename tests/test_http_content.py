@@ -174,7 +174,9 @@ def test_local_card_head_goes_to_ha_url_without_token(monkeypatch):
 
     async def record(request):
         seen.append((request.method, request.path_qs, request.headers.get("Authorization")))
-        return web.Response(status=404 if "missing" in request.path else 200)
+        if "missing" in request.path:
+            return web.Response(status=404)
+        return web.Response(body=b"x" * 1234)
 
     async def scenario():
         app = web.Application()
@@ -192,7 +194,8 @@ def test_local_card_head_goes_to_ha_url_without_token(monkeypatch):
                 proxy = http_proxy.HttpProxy(http)
                 card = "/local/homecraft/heating-card.js?v=0.2.0"
                 head = {"method": "HEAD", "path": card, "headers": {"Authorization": "x"}}
-                assert (await proxy.handle(head))["status"] == 200
+                ok = await proxy.handle(head)
+                assert ok["status"] == 200 and ok["headers"]["Content-Length"] == "1234"
                 missing = {"method": "HEAD", "path": "/local/homecraft/missing.js?v=1.0.0"}
                 assert (await proxy.handle(missing))["status"] == 404
                 with pytest.raises(OpError) as e:

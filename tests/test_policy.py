@@ -235,6 +235,7 @@ HTTP = [
     ("HEAD", CARD, None, ("local", CARD, "")),
     # refused
     ("GET", CARD, None, None),
+    ("HEAD", CARD, b"", None),
     ("HEAD", "/local/homecraft/heating-card.js", None, None),
     ("HEAD", "/local/other.js?v=1.0.0", None, None),
     ("HEAD", "/local/homecraft/../x.js?v=1.0.0", None, None),

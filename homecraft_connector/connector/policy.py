@@ -297,7 +297,8 @@ def http_target(method: str, path: str, body: bytes | None = None) -> tuple[str,
     (the caller checks the id and `flow_step_host`) · ("ingress", token, subpath)
     (the caller checks `ingress_allowed` for the token's add-on) · ("local", path, "")
     for a HEAD of Homecraft's own card resource, `?v=X.Y.Z` included (#16).
-    `path` is `/api/...`, query included; the query is not checked (except for "local")."""
+    `path` is `/api/...` or the card's `/local/homecraft/...`, query included; the
+    query is not checked (except for "local")."""
     if not isinstance(path, str) or not isinstance(method, str):
         return None
     route = path.split("?", 1)[0]
@@ -307,7 +308,7 @@ def http_target(method: str, path: str, body: bytes | None = None) -> tuple[str,
     if any(part in (".", "..") for part in route.split("/")):
         return None
     if CARD_URL_RE.fullmatch(path):  # does HA serve the card it just got? (#16)
-        return ("local", path, "") if method == "HEAD" else None
+        return ("local", path, "") if method == "HEAD" and body is None else None
     if m := INGRESS_RE.fullmatch(route):
         return ("ingress", m.group(1), m.group(2) or "/")
     if route == FLOW:

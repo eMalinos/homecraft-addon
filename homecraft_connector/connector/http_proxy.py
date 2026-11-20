@@ -113,8 +113,6 @@ class HttpProxy:
         if target is None:
             raise refused
         kind, ref, subpath = target
-        if kind == "local" and body is not None:
-            raise refused
         if kind == "ingress":
             slug = await _ingress_slug(self._session, ref)
             if slug is None or not policy.ingress_allowed(slug, method, subpath):
@@ -221,11 +219,14 @@ class HttpProxy:
                     data += chunk
                     if len(data) > MAX_BODY:
                         raise policy.OpError("too_large", "response body is too large")
+                # HEAD has no body to de-chunk: the card check compares
+                # Content-Length with the bytes it wrote (#16).
+                dropped = (
+                    DROPPED_HEADERS - {"content-length"} if kind == "local" else DROPPED_HEADERS
+                )
                 return {
                     "status": resp.status,
-                    "headers": {
-                        k: v for k, v in resp.headers.items() if k.lower() not in DROPPED_HEADERS
-                    },
+                    "headers": {k: v for k, v in resp.headers.items() if k.lower() not in dropped},
                     "body_b64": base64.b64encode(data).decode(),
                 }
         except (TimeoutError, aiohttp.ClientError, OSError) as e:
