@@ -1,4 +1,5 @@
-"""The `http` operation: core REST with the agent's token, add-on ingress without one."""
+"""The `http` operation: core REST with the agent's token, add-on ingress and
+HEAD of Homecraft's own card under /local without one."""
 
 import asyncio
 import base64
@@ -199,7 +200,7 @@ class HttpProxy:
             for k, v in (in_headers if isinstance(in_headers, dict) else {}).items()
             if isinstance(k, str) and isinstance(v, str) and k.lower() in allowed
         }
-        if kind == "ingress":
+        if kind in ("ingress", "local"):  # never the Supervisor's token on HA_URL
             url = settings.HA_URL + path
         else:
             url = settings.CORE_HTTP_URL + path
@@ -218,11 +219,14 @@ class HttpProxy:
                     data += chunk
                     if len(data) > MAX_BODY:
                         raise policy.OpError("too_large", "response body is too large")
+                # HEAD has no body to de-chunk: the card check compares
+                # Content-Length with the bytes it wrote (#16).
+                dropped = (
+                    DROPPED_HEADERS - {"content-length"} if kind == "local" else DROPPED_HEADERS
+                )
                 return {
                     "status": resp.status,
-                    "headers": {
-                        k: v for k, v in resp.headers.items() if k.lower() not in DROPPED_HEADERS
-                    },
+                    "headers": {k: v for k, v in resp.headers.items() if k.lower() not in dropped},
                     "body_b64": base64.b64encode(data).decode(),
                 }
         except (TimeoutError, aiohttp.ClientError, OSError) as e:

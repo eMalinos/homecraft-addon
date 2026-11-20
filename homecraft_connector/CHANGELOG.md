@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.12.0
+
+- Homecraft si po instalaci karty ověří, že ji HA servíruje (jen `HEAD` na
+  `/local/homecraft/<id>.js?v=…`), a zjistí, zda jsou zdroje Lovelace v režimu
+  YAML (`lovelace/info`).
+
 ## 0.11.0
 
 - Karty Homecraftu (`www/homecraft/<id>.js`) doplněk zapíše jen s platným
