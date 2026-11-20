@@ -19,7 +19,7 @@ MAX_SESSIONS = 8
 MAX_MSG_SIZE = 16 * 1024 * 1024
 AUTH_TIMEOUT = 10
 SUPERVISOR_TIMEOUT = 10  # HA core's default for `supervisor/api`
-SUPERVISOR_MAX_TIMEOUT = 600  # an add-on install: Homecraft asks for no limit
+SUPERVISOR_MAX_TIMEOUT = 900  # an add-on install: Homecraft waits 900 s (INSTALL_TIMEOUT)
 
 Push = Callable[[dict], Awaitable[None]]
 

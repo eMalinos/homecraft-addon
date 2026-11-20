@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.12.2
+
+- Instalace doplňku přes Použít může trvat až 15 minut (dřív Connector
+  utnul volání Supervisoru po 10 minutách a Použít selhalo s `TimeoutError`).
+
 ## 0.12.1
 
 - Repozitář i obrazy doplňku jsou v organizaci `homecraftcz`
