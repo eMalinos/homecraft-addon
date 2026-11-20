@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.12.1
+
+- Repozitář i obrazy doplňku jsou v organizaci `homecraftcz`
+  (`ghcr.io/homecraftcz/homecraft-connector-*`). Stávající instalace s URL
+  `eMalinos/homecraft-addon` fungují dál přes přesměrování, nic neměň.
+
 ## 0.12.0
 
 - Homecraft si po instalaci karty ověří, že ji HA servíruje (jen `HEAD` na

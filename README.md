@@ -10,7 +10,7 @@ Repozitář doplňků (add-onů) pro Home Assistant OS od [Homecraftu](https://a
 
 1. **Nastavení → Doplňky → Obchod s doplňky**.
 2. Vpravo nahoře **⋮ → Repozitáře**.
-3. Vlož URL `https://github.com/eMalinos/homecraft-addon` a dej **Přidat**.
+3. Vlož URL `https://github.com/homecraftcz/homecraft-addon` a dej **Přidat**.
 4. Obchod znovu načti, doplněk **Homecraft Connector** se objeví dole v sekci *Homecraft*.
 
 ## Licence

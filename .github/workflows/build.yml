@@ -1,7 +1,7 @@
 name: Build
 
 # A tag v<version> (config.yaml `version`) builds both images and pushes them as
-# ghcr.io/emalinos/homecraft-connector-{arch}:<version>, which the Supervisor pulls.
+# ghcr.io/homecraftcz/homecraft-connector-{arch}:<version>, which the Supervisor pulls.
 on:
   push:
     tags: ["v*"]
@@ -37,7 +37,7 @@ jobs:
           arch: ${{ matrix.arch }}
           context: homecraft_connector
           container-registry-password: ${{ secrets.GITHUB_TOKEN }}
-          image: ghcr.io/emalinos/homecraft-connector-${{ matrix.arch }}
+          image: ghcr.io/homecraftcz/homecraft-connector-${{ matrix.arch }}
           image-tags: ${{ steps.version.outputs.version }}
           push: "true"
           skip-existing: ${{ steps.version.outputs.version }}
