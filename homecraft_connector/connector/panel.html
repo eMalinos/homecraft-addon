@@ -334,18 +334,28 @@ function updateAction(u, paused) {
     try {
       await call("POST", "api/updates/run", { kind: u.kind, item: u.id });
       show("updatesMsg", "");
-    } catch (e) { show("updatesMsg", e.message, true); }
+    } catch (e) {
+      show("updatesMsg", e.message, true);
+      b.disabled = false;  // an unchanged list is not redrawn
+    }
     refreshUpdates().catch(() => {});
   };
   td.append(b);
   return td;
 }
 
+let lastUpdates = null;
+
 async function refreshUpdates() {
   const s = await call("GET", "api/updates");
+  const json = JSON.stringify(s);
+  if (json === lastUpdates) return;  // redraw only on a change (keeps focus and clicks)
+  lastUpdates = json;
+  if (s.connected && !s.paused) show("updatesMsg", "");
   $("updatesBody").replaceChildren(...s.items.map((u) => {
     const tr = document.createElement("tr");
-    for (const text of [u.name, KINDS[u.kind] || u.kind, u.installed, u.available]) {
+    const kind = Object.hasOwn(KINDS, u.kind) ? KINDS[u.kind] : u.kind;
+    for (const text of [u.name, kind, u.installed, u.available]) {
       const td = document.createElement("td");
       td.textContent = text;
       tr.append(td);

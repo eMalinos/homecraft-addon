@@ -123,7 +123,7 @@ def test_updates_list_and_run(run_panel, agent, monkeypatch):
         no_nonce = (await http.post("/api/updates/run", json=body)).status
         ok = await http.post("/api/updates/run", json=body, headers=CSRF)
         out = [listed, no_nonce, ok.status, await ok.json()]
-        for e in (RuntimeError("offline"), RuntimeError("paused"), ValueError()):
+        for e in (RuntimeError("offline"), RuntimeError("paused"), ValueError(), RuntimeError()):
             errors.append(e)
             r = await http.post("/api/updates/run", json=body, headers=CSRF)
             out.append((r.status, (await r.json())["error"]))
@@ -139,9 +139,10 @@ def test_updates_list_and_run(run_panel, agent, monkeypatch):
         (409, "Connector není připojený"),
         (409, "Homecraft je pozastavený"),
         (400, "Položka není v seznamu"),
+        (409, "Connector není připojený"),
     ]
     assert missing == 400
-    assert calls == [("card", "x")] * 4
+    assert calls == [("card", "x")] * 5
 
 
 def test_page_has_the_updates_section(run_panel):

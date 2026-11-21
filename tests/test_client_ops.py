@@ -215,7 +215,9 @@ def test_run_update_sends_update_run(agent):
     ]
     assert audit.recent()[0]["op"] == "update.run"
     assert audit.recent()[0]["target"] == "card again"
-    for kind, item in (("card", "busy"), ("card", "nope"), ("other", "x")):
+    # sent: running until the next updates.set, so a second click is refused
+    assert [u["state"] for u in agent.updates] == ["running"] * 3
+    for kind, item in (("card", "x"), ("card", "busy"), ("card", "nope"), ("other", "x")):
         with pytest.raises(ValueError):
             asyncio.run(agent.run_update(kind, item))
     agent.paused = True
@@ -225,3 +227,15 @@ def test_run_update_sends_update_run(agent):
     with pytest.raises(RuntimeError, match="offline"):
         asyncio.run(agent.run_update("card", "x"))
     assert len(conn.sent) == 2
+
+
+def test_run_update_failed_send_is_offline(agent):
+    class Closed:
+        async def send(self, data: dict) -> None:
+            raise RuntimeError("closing transport")
+
+    agent._conn, agent.connected = Closed(), True
+    agent.updates = [_update()]
+    with pytest.raises(RuntimeError, match="offline"):
+        asyncio.run(agent.run_update("card", "x"))
+    assert agent.updates[0]["state"] == "available" and audit.recent() == []

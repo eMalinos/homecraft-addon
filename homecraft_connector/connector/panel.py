@@ -177,7 +177,9 @@ async def _run_update(request: web.Request) -> web.Response:
     try:
         await request.app[CLIENT].run_update(kind, item)
     except RuntimeError as e:
-        return web.json_response({"ok": False, "error": UPDATE_ERRORS[str(e)]}, status=409)
+        return web.json_response(
+            {"ok": False, "error": UPDATE_ERRORS.get(str(e), UPDATE_ERRORS["offline"])}, status=409
+        )
     except ValueError:
         return web.json_response({"ok": False, "error": "Položka není v seznamu"}, status=400)
     return web.json_response({"ok": True})

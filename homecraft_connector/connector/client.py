@@ -338,16 +338,24 @@ class Client:
             raise RuntimeError("offline")
         if self.paused:
             raise RuntimeError("paused")
-        if not any(
-            u["kind"] == kind and u["id"] == item and u["state"] in ("available", "failed")
-            for u in self.updates
-        ):
+        offered = next(
+            (
+                u
+                for u in self.updates
+                if u["kind"] == kind and u["id"] == item and u["state"] in ("available", "failed")
+            ),
+            None,
+        )
+        if offered is None:
             raise ValueError("not offered")
         try:
             await conn.send({"op": "update.run", "kind": kind, "item": item})
-        except (ConnectionError, aiohttp.ClientError):
+        except (ConnectionError, RuntimeError, aiohttp.ClientError):
             raise RuntimeError("offline") from None
         audit.record("update.run", f"{kind} {item}", True)
+        # Shown as running (no second click) until Homecraft's next updates.set
+        # says what it made of it, a refusal included.
+        offered.update(state="running", message="")
 
     def _failed(self, outcome: str, message: str) -> str:
         logger.warning("%s", message)

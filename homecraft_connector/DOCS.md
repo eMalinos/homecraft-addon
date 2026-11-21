@@ -93,7 +93,7 @@ Panel je dostupný jen přes Home Assistant (ingress), nikde jinde neposlouchá.
   Homecraftu zprávu `update.run` (audit `update.run`). Kartu pak nainstaluje
   Homecraft stejně jako Apply (podepsaný soubor přes `file.write`, zdroj
   Lovelace s `?v=`), ve verzi, kterou určí sám; doplněk nic nestahuje. Stav
-  řádku: **Probíhá…**, **Hotovo** (ukáže se jednou, pak řádek zmizí) nebo chyba
+  řádku: **Probíhá…**, **Hotovo** (zůstane do příští aktualizace seznamu z Homecraftu) nebo chyba
   s tlačítkem **Aktualizovat znovu**. Položku, kterou Homecraft nenabízí, nebo
   druhé kliknutí do 5 s Homecraft nenainstaluje a jen pošle aktuální seznam.
   Pozastavený doplněk tlačítka zakáže a nic nepošle.
