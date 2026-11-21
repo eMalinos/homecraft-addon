@@ -43,6 +43,19 @@ REFUSED_DELAYS = (60, 5 * 60, 15 * 60, 60 * 60)
 # than this after the push (an HA session can stay open for long).
 ROTATE_AFTER = 15 * 60
 
+# updates.set (#790): what Homecraft offers in the panel's Aktualizace section
+MAX_UPDATES = 50
+UPDATE_FIELDS = {
+    "kind": 64,
+    "id": 64,
+    "name": 80,
+    "installed": 64,
+    "available": 64,
+    "state": 64,
+    "message": 500,
+}
+UPDATE_STATES = ("available", "running", "failed", "done")
+
 
 # How a connection attempt ended; picks the reconnect delay.
 OUTAGE, REFUSED, PENDING = "outage", "refused", "pending"
@@ -127,6 +140,9 @@ class Client:
         # Fingerprint of the staged token Access refused: logged once, and a
         # repeated push of it does not trigger a reconnect (#565).
         self._refused_fp: str | None = None
+        # The latest updates.set (#790), in memory only: Homecraft sends it again
+        # after every connect, so it is cleared when the connection ends.
+        self.updates: list[dict] = []
 
     def reconnect_now(self) -> None:
         """Connect again at once (panel: **Připojit znovu**, token saved or deleted):
@@ -312,6 +328,27 @@ class Client:
             conn.request_rotation()
         return {"id": rid, "ok": True, "result": None}
 
+    async def run_update(self, kind: str, item: str) -> None:
+        """Panel: ask Homecraft to install `item` (`update.run`, no `id`). Homecraft
+        picks the version and installs it, or sends the list back when it refuses.
+
+        RuntimeError("offline" | "paused"); ValueError when it is not offered now."""
+        conn = self._conn
+        if conn is None or not self.connected:
+            raise RuntimeError("offline")
+        if self.paused:
+            raise RuntimeError("paused")
+        if not any(
+            u["kind"] == kind and u["id"] == item and u["state"] in ("available", "failed")
+            for u in self.updates
+        ):
+            raise ValueError("not offered")
+        try:
+            await conn.send({"op": "update.run", "kind": kind, "item": item})
+        except (ConnectionError, aiohttp.ClientError):
+            raise RuntimeError("offline") from None
+        audit.record("update.run", f"{kind} {item}", True)
+
     def _failed(self, outcome: str, message: str) -> str:
         logger.warning("%s", message)
         self.last_error = message
@@ -356,6 +393,7 @@ class Client:
             ws_proxy.Sessions(http, send, lambda: self.paused, on_end=maybe_rotate),
             http_proxy.HttpProxy(http),
             request_rotation,
+            send,
         )
         self._conn = conn
         sessions = conn.sessions
@@ -420,6 +458,7 @@ class Client:
             if deadline is not None:
                 deadline.cancel()
             self._conn = None
+            self.updates = []  # stale once disconnected; resent after the next connect
             for task in list(tasks):
                 task.cancel()
             await sessions.close_all()
@@ -444,6 +483,12 @@ class Client:
         # Homecraft, never HA, and a paused home must not lose that at rotation.
         if op == "access_token.set":
             return await self._set_token(rid, request, conn)
+        if op == "updates.set":  # the panel's list only, never HA: a paused home gets it too
+            try:
+                self.updates = _parse_updates(request["items"])
+            except (KeyError, TypeError, ValueError):
+                return _error(rid, "bad_request", "updates.set: invalid items")
+            return {"id": rid, "ok": True, "result": None}
         if self.paused and op != "ws.close":  # Homecraft may still close its sessions
             return _error(rid, "paused", "")
         try:
@@ -475,6 +520,7 @@ class _Conn:
     sessions: ws_proxy.Sessions
     http: http_proxy.HttpProxy
     request_rotation: Callable[[], None]  # a token was staged (#565)
+    send: Callable[[dict], Awaitable[None]]  # a message of our own to Homecraft (update.run)
     ops: asyncio.Semaphore = field(default_factory=lambda: asyncio.Semaphore(MAX_CONCURRENT_OPS))
 
 
@@ -538,6 +584,21 @@ async def _dispatch(op: object, req: dict, conn: _Conn) -> object:
         async with conn.ops:
             return await core_config.packages_include(conn.http)
     raise policy.OpError("unknown_op", str(op)[:64])
+
+
+def _parse_updates(items: object) -> list[dict]:
+    """updates.set `items`, checked field by field; ValueError/TypeError/KeyError otherwise."""
+    if not isinstance(items, list) or len(items) > MAX_UPDATES:
+        raise ValueError
+    out = []
+    for item in items:
+        u = {k: item[k] for k in UPDATE_FIELDS}
+        if any(not isinstance(v, str) or len(v) > UPDATE_FIELDS[k] for k, v in u.items()):
+            raise ValueError
+        if u["state"] not in UPDATE_STATES:
+            raise ValueError
+        out.append(u)
+    return out
 
 
 def _error(rid: object, code: str, message: str) -> dict:

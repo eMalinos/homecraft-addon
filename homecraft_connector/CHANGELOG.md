@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.15.0
+
+- Panel má na Přehledu sekci **Aktualizace**: zastaralé karty Homecraftu, které
+  Homecraft v HA spravuje, s tlačítkem **Aktualizovat**. Kartu nainstaluje
+  Homecraft (podepsaný soubor jako při Apply), bez Plan/Apply v Homecraftu.
+  Seznam posílá Homecraft (`updates.set`), doplněk ho drží jen v paměti.
+  Tlačítko pošle Homecraftu `update.run` (audit `update.run`); doplněk sám nic
+  nestahuje ani nezapisuje. Pozastavený nebo odpojený doplněk nic nepošle.
+
 ## 0.14.0
 
 - Integrace Scheduler component a Browser Mod jdou na HA 2026.11+ nainstalovat

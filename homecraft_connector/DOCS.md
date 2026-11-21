@@ -85,6 +85,18 @@ Panel je dostupný jen přes Home Assistant (ingress), nikde jinde neposlouchá.
   otisk tokenu (prvních 16 znaků SHA-256), nikdy token. Nemůže nastavit nic
   jiného než token (adresu serveru ani možnosti ne). Spojení s Homecraftem
   neukládá cookies, takže cookie od Cloudflare Access nikdy nenahradí token.
+- **Aktualizace** (na Přehledu): karty Homecraftu, které Homecraft v HA
+  spravuje a má k nim novější verzi (položka, typ, nainstalovaná a dostupná
+  verze). Seznam posílá Homecraft po připojení a při každé změně (operace
+  `updates.set`, i během pauzy: týká se jen panelu, ne Home Assistantu).
+  Doplněk ho drží jen v paměti a po odpojení ho zahodí. **Aktualizovat** pošle
+  Homecraftu zprávu `update.run` (audit `update.run`). Kartu pak nainstaluje
+  Homecraft stejně jako Apply (podepsaný soubor přes `file.write`, zdroj
+  Lovelace s `?v=`), ve verzi, kterou určí sám; doplněk nic nestahuje. Stav
+  řádku: **Probíhá…**, **Hotovo** (ukáže se jednou, pak řádek zmizí) nebo chyba
+  s tlačítkem **Aktualizovat znovu**. Položku, kterou Homecraft nenabízí, nebo
+  druhé kliknutí do 5 s Homecraft nenainstaluje a jen pošle aktuální seznam.
+  Pozastavený doplněk tlačítka zakáže a nic nepošle.
 - **Audit**: posledních 200 operací (čas, operace, cíl, výsledek, trvání).
   Cíl je typ příkazu WebSocketu, metoda a cesta HTTP nebo cesta souboru,
   nikdy obsah souborů, těla požadavků ani tokeny. Soubor `/data/audit.jsonl`
