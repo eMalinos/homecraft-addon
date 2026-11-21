@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.14.0
+
+- Integrace Scheduler component a Browser Mod jdou na HA 2026.11+ nainstalovat
+  přes Marketplace (vestavěný nástupce HACS): doplněk pouští
+  `marketplace/repositories/list`, `marketplace/warning/accept` a
+  `marketplace/repository/install` jen pro připnuté repozitáře a verze jako
+  u HACS, nikdy s náhradou vestavěné integrace. Nová integrace se načte bez
+  restartu Home Assistantu.
+
 ## 0.13.0
 
 - Homecraft může nechat HACS stáhnout Scheduler component (v3.3.9) a Browser
