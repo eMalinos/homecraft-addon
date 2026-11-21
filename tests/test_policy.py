@@ -104,7 +104,11 @@ WS_ALLOWED = [
         "dismiss",
         service_data={"notification_id": "homecraft_card_update_heating-card"},
     ),
+    {"type": "hacs/repositories/list"},
+    {"id": 9, "type": "hacs/repository/download", "repository": "286186485", "version": "v3.3.9"},
 ]
+
+HACS_DL = {"id": 9, "type": "hacs/repository/download", "repository": "286186485"}
 
 
 def res(url="/local/homecraft/heating-card.js?v=0.2.0", type_="create", **extra):
@@ -202,6 +206,16 @@ WS_REFUSED = [
     svc("persistent_notification", []),
     svc("automation", []),
     {**note(), "return_response": True},
+    {**HACS_DL, "version": "v3.3.8"},
+    {**HACS_DL, "repository": "1", "version": "v3.3.9"},
+    HACS_DL,
+    {**HACS_DL, "version": "v3.3.9", "category": "integration"},
+    {**HACS_DL, "repository": 286186485, "version": "v3.3.9"},
+    {**HACS_DL, "repository": "1", "version": None},
+    {**HACS_DL, "repository": [], "version": "v3.3.9"},
+    {**HACS_DL, "repository": {}, "version": "v3.3.9"},
+    {"type": "hacs/repository/remove", "repository": "286186485"},
+    {"type": "hacs/repositories/add", "repository": "x/y", "category": "integration"},
 ]
 
 
@@ -224,6 +238,7 @@ HTTP = [
     ("POST", "/api/config/core/check_config", None, ("core", "/api/config/core/check_config", "")),
     ("POST", FLOW, INFLUX, ("core", FLOW, "")),
     ("POST", FLOW, json.dumps({"handler": "sql"}).encode(), ("core", FLOW, "")),
+    ("POST", FLOW, json.dumps({"handler": "scheduler"}).encode(), ("core", FLOW, "")),
     ("POST", f"{FLOW}/abc123", b"{}", ("flow", "abc123", "")),
     ("DELETE", f"{FLOW}/abc123", None, ("flow", "abc123", "")),
     ("POST", "/api/config/config_entries/entry/01JABC/reload", None, ("core", ...)),
@@ -245,6 +260,7 @@ HTTP = [
     ("POST", "/api/services/shell_command/x", None, None),
     ("GET", "/api/config/core/check_config", None, None),
     ("POST", FLOW, json.dumps({"handler": "ssh"}).encode(), None),
+    ("POST", FLOW, json.dumps({"handler": "hacs"}).encode(), None),
     ("POST", FLOW, b"not json", None),
     ("POST", FLOW, b"[]", None),
     ("GET", f"{FLOW}/abc123", None, None),

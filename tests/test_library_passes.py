@@ -119,7 +119,20 @@ def test_integration_steps_pass():
     ]
     if not entries:
         pytest.skip(f"no HFB library at {HFB}")
-    assert {d for d, _ in entries} == {"sql", "speedtestdotnet", "ping", "holiday"}
+    assert {d for d, _ in entries} == {"sql", "speedtestdotnet", "ping", "holiday", "systemmonitor"}
     for domain, entry in entries:
         for step in entry["steps"]:
             assert policy.flow_step_allowed(domain, json.dumps(step).encode()), (domain, step)
+
+
+def test_hacs_requires_pinned():
+    """Every HACS integration the library requires is pinned in the add-on (#22)."""
+    paths = sorted((HFB / "library").glob("*/*.json"))
+    if not paths:
+        pytest.skip(f"no HFB library at {HFB}")
+    for path in paths:
+        data = json.loads(path.read_text())
+        for req in data.get("requires", []) if isinstance(data, dict) else []:
+            if isinstance(req, dict) and (hacs := req.get("hacs")):
+                pair = (hacs["repository"], hacs["version"])
+                assert pair in policy.HACS_PINNED.items(), (path.name, pair)
