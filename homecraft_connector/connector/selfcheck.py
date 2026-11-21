@@ -5,6 +5,7 @@ the result goes into the issue by hand."""
 
 import contextlib
 import logging
+import os
 from collections.abc import AsyncIterator
 
 import aiohttp
@@ -81,6 +82,28 @@ async def _check_http(
         _log(name, "FAIL", type(e).__name__)
         return
     _log(name, "OK" if status == expect else "FAIL", f"HTTP {status}")
+
+
+async def resolve_ha_url() -> None:
+    """HA_URL's port from the Supervisor's /core/info: `http: server_port`
+    need not be 8123 (e.g. 80). Kept when env sets HA_URL or there is no
+    Supervisor; the default stays when the Supervisor does not answer."""
+    if "HA_URL" in os.environ or not settings.SUPERVISOR_URL:
+        return
+    name = "http supervisor /core/info"
+    headers = {"Authorization": f"Bearer {settings.SUPERVISOR_TOKEN}"}
+    try:
+        async with (
+            aiohttp.ClientSession(timeout=TIMEOUT) as session,
+            session.get(f"{settings.SUPERVISOR_URL}/core/info", headers=headers) as resp,
+        ):
+            info = (await resp.json())["data"]
+        port = int(info["port"])
+    except (TimeoutError, aiohttp.ClientError, OSError, KeyError, TypeError, ValueError) as e:
+        _log(name, "FAIL", type(e).__name__)
+        return
+    settings.HA_URL = f"http://homeassistant:{port}"
+    _log(name, "OK", settings.HA_URL + (", ssl: ingress nefunguje" if info.get("ssl") else ""))
 
 
 async def run() -> None:

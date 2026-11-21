@@ -37,6 +37,7 @@ async def main() -> None:
     client = Client(server_url, agent_id, key, settings.version(), paused, fingerprint.Collector())
     await panel.start(client, code, verification)
     try:
+        await selfcheck.resolve_ha_url()
         await selfcheck.run()
     except Exception:
         logger.exception("self-check selhal, pokračuji bez něj")

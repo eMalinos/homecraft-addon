@@ -17,7 +17,8 @@ CORE_WS_URL = os.environ.get("CORE_WS_URL", "ws://supervisor/core/websocket")
 CORE_HTTP_URL = os.environ.get("CORE_HTTP_URL", "http://supervisor/core")
 # "" = no Supervisor (dev): its checks and `supervisor/api` answer `unsupported`.
 SUPERVISOR_URL = os.environ.get("SUPERVISOR_URL", "http://supervisor")
-# HA core directly (ingress needs it): on HA OS the `homeassistant` hostname.
+# HA core directly (ingress needs it): on HA OS the `homeassistant` hostname;
+# selfcheck.resolve_ha_url sets the port from the Supervisor at start.
 HA_URL = os.environ.get("HA_URL", "http://homeassistant:8123")
 CONFIG_ROOT = Path(os.environ.get("CONFIG_ROOT", "/homeassistant"))
 # `data.uuid` of .storage/core.uuid, read by run.sh (the agent's own AppArmor
