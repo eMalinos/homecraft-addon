@@ -108,10 +108,12 @@ jiného odmítne s chybou `not_allowed`.
 
 Integrace z HACS: doplněk smí přečíst seznam repozitářů HACS
 (`hacs/repositories/list`) a nechat HACS stáhnout jen Scheduler component
-(v3.3.9) a Browser Mod (v3.4.2). Repozitáře i verze jsou pevně v kódu
-doplňku, kód stahuje HACS z GitHubu, server Homecraftu žádný kód nedoručuje.
-Po stažení je potřeba restartovat Home Assistant (dělá uživatel). Přidat jiný
-repozitář do HACS ani integraci odinstalovat doplněk nesmí.
+a Browser Mod v připnuté verzi (tag vydání: v3.3.9, v3.4.2). Repozitáře
+i tagy jsou pevně v kódu doplňku, kód stahuje HACS z GitHubu, server
+Homecraftu žádný kód nedoručuje. Doplněk nekontroluje, zda už je integrace
+nainstalovaná (stažení posílá backend jen u chybějící). Po stažení je potřeba
+restartovat Home Assistant (dělá uživatel). Přidat jiný repozitář do HACS ani
+integraci odinstalovat doplněk nesmí.
 
 Vlastní karty Homecraftu: doplněk smí zapsat a smazat soubory
 `www/homecraft/<id>.js` (první zápis založí i chybějící `www/`), vytvořit a
@@ -138,8 +140,8 @@ a odmítne s chybou `refused_content` vše, co by spouštělo příkazy nebo pos
 data ven (se záznamem v auditu panelu). Seznamy jsou pevně v kódu
 a nastavení je nerozšíří. Je to denylist: díru zužuje, nezavírá (viz limity).
 
-Integrace z HACS mají připnutou verzi v kódu doplňku: nová verze integrace =
-nová verze doplňku.
+Integrace z HACS mají v kódu doplňku připnutou verzi (tag vydání): nová
+verze integrace = nová verze doplňku.
 
 - **Soubory v `packages/`** se rozparsují jako YAML. Odmítne se:
   - klíč `shell_command`, `command_line`, `python_script`, `pyscript`,
@@ -243,6 +245,12 @@ program, musí ve stejném PR upravit `apparmor.txt` a ověřit ho na HA OS
   může nasadit jen podepsanou kartu Homecraftu, ale i starší verzi nebo jinou
   kartu pod jiným názvem. Ochrana platí od verze 0.11.0 (starší verze doplňku
   zapíše jakýkoli JavaScript, aktualizujte).
+- Integrace z HACS jsou připnuté jen tagem vydání, ne obsahem: kdyby autor
+  tag v repozitáři přesunul, HACS stáhne nový obsah.
+- Služba Browser Mod `browser_mod.javascript` spouští JavaScript v
+  prohlížečích registrovaných v Browser Mod. Vzhled Mushroom feature Topení ji
+  dnes zapisuje do `custom_templates/` a doplněk její kód zatím neomezuje
+  (později povolí jen přesné úryvky z knihovny).
 
 **Rotace klíče**: doplněk přijímá víc klíčů pro podpis karet. Nový klíč přijde
 s novou verzí doplňku, starý se odebere v některé další (při úniku hned).

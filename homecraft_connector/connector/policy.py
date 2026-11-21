@@ -193,9 +193,12 @@ def ws_allowed(msg: object) -> bool:
             msg.get("pref_disable_polling") is True and isinstance(msg.get("entry_id"), str)
         )
     if t == "hacs/repository/download":  # `repository` is a string in HACS
-        return set(msg) == {"id", "type", "repository", "version"} and HACS_PINNED.get(
-            msg.get("repository")
-        ) == msg.get("version")
+        repo, version = msg.get("repository"), msg.get("version")
+        if not (isinstance(repo, str) and isinstance(version, str)):
+            return False
+        return set(msg) == {"id", "type", "repository", "version"} and (
+            HACS_PINNED.get(repo) == version
+        )
     if t == "lovelace/dashboards/create":
         return msg.get("url_path") == OWN_DASHBOARD
     if t == "lovelace/resources/create":

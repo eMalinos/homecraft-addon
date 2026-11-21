@@ -211,6 +211,9 @@ WS_REFUSED = [
     HACS_DL,
     {**HACS_DL, "version": "v3.3.9", "category": "integration"},
     {**HACS_DL, "repository": 286186485, "version": "v3.3.9"},
+    {**HACS_DL, "repository": "1", "version": None},
+    {**HACS_DL, "repository": [], "version": "v3.3.9"},
+    {**HACS_DL, "repository": {}, "version": "v3.3.9"},
     {"type": "hacs/repository/remove", "repository": "286186485"},
     {"type": "hacs/repositories/add", "repository": "x/y", "category": "integration"},
 ]
