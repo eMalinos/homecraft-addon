@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.12.4
+
+- Start doplňku už v HA nevytváří notifikaci o nepovedeném přihlášení.
+  Kontrola při startu ověřovala dosažitelnost HA požadavkem bez tokenu
+  (HTTP 401), teď používá `/manifest.json`, který přihlášení nevyžaduje.
+
 ## 0.12.3
 
 - Ingress a kontrola karet fungují i s HA na jiném portu než 8123 (`http:`

@@ -120,5 +120,8 @@ async def run() -> None:
         await _check_http(
             session, "http core REST /api/", f"{settings.CORE_HTTP_URL}/api/", 200, True
         )
-        # Direct reach to core (ingress): 401 without a token means reachable.
-        await _check_http(session, "http core /api/", f"{settings.HA_URL}/api/", 401, False)
+        # Direct reach to core (ingress), without a token: a 401 would make HA
+        # report a failed login on every start, the manifest needs no auth.
+        await _check_http(
+            session, "http core /manifest.json", f"{settings.HA_URL}/manifest.json", 200, False
+        )
