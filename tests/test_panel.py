@@ -103,6 +103,57 @@ def test_wrong_nonce_is_refused_with_security_headers(run_panel):
     assert headers["Cache-Control"] == "no-store" and headers["X-Content-Type-Options"] == "nosniff"
 
 
+def test_updates_list_and_run(run_panel, agent, monkeypatch):
+    item = {"kind": "card", "id": "x", "name": "X", "installed": "1", "available": "2",
+            "state": "available", "message": ""}  # fmt: skip
+    agent.updates = [item]
+    calls: list[tuple[str, str]] = []
+    errors: list[Exception] = []
+
+    async def run_update(kind, item):
+        calls.append((kind, item))
+        if errors:
+            raise errors.pop()
+
+    monkeypatch.setattr(agent, "run_update", run_update)
+    body = {"kind": "card", "item": "x"}
+
+    async def scenario(http):
+        listed = await (await http.get("/api/updates")).json()
+        no_nonce = (await http.post("/api/updates/run", json=body)).status
+        ok = await http.post("/api/updates/run", json=body, headers=CSRF)
+        out = [listed, no_nonce, ok.status, await ok.json()]
+        for e in (RuntimeError("offline"), RuntimeError("paused"), ValueError(), RuntimeError()):
+            errors.append(e)
+            r = await http.post("/api/updates/run", json=body, headers=CSRF)
+            out.append((r.status, (await r.json())["error"]))
+        out.append(
+            (await http.post("/api/updates/run", json={"kind": "card"}, headers=CSRF)).status
+        )
+        return out
+
+    listed, no_nonce, ok, ok_body, *errs, missing = run_panel(scenario)
+    assert listed == {"connected": False, "paused": False, "items": [item]}
+    assert no_nonce == 403 and ok == 200 and ok_body == {"ok": True}
+    assert errs == [
+        (409, "Connector není připojený"),
+        (409, "Homecraft je pozastavený"),
+        (400, "Položka není v seznamu"),
+        (409, "Connector není připojený"),
+    ]
+    assert missing == 400
+    assert calls == [("card", "x")] * 5
+
+
+def test_page_has_the_updates_section(run_panel):
+    async def scenario(http):
+        return await (await http.get("/")).text()
+
+    html = run_panel(scenario)
+    assert 'id="updates"' in html and "<h2>Aktualizace</h2>" in html
+    assert html.index('id="updates"') < html.index("<h2>Spojení</h2>")
+
+
 def test_page_carries_the_nonce(run_panel):
     async def scenario(http):
         return await (await http.get("/")).text()

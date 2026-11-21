@@ -158,6 +158,33 @@ async def _reconnect(request: web.Request) -> web.Response:
     return web.json_response({"ok": True})
 
 
+async def _updates(request: web.Request) -> web.Response:
+    client = request.app[CLIENT]
+    return web.json_response(
+        {"connected": client.connected, "paused": client.paused, "items": client.updates}
+    )
+
+
+UPDATE_ERRORS = {
+    "offline": "Connector není připojený",
+    "paused": "Homecraft je pozastavený",
+}
+
+
+async def _run_update(request: web.Request) -> web.Response:
+    kind = await _json_field(request, "kind", str)
+    item = await _json_field(request, "item", str)
+    try:
+        await request.app[CLIENT].run_update(kind, item)
+    except RuntimeError as e:
+        return web.json_response(
+            {"ok": False, "error": UPDATE_ERRORS.get(str(e), UPDATE_ERRORS["offline"])}, status=409
+        )
+    except ValueError:
+        return web.json_response({"ok": False, "error": "Položka není v seznamu"}, status=400)
+    return web.json_response({"ok": True})
+
+
 def make_app(client: Client, pairing_code: str, verification_code: str) -> web.Application:
     app = web.Application(middlewares=[_guard], client_max_size=16 * 1024)
     app.on_response_prepare.append(_security_headers)
@@ -173,6 +200,8 @@ def make_app(client: Client, pairing_code: str, verification_code: str) -> web.A
     app.router.add_delete("/api/ha-token", _clear_ha_token)
     app.router.add_post("/api/pause", _pause)
     app.router.add_post("/api/reconnect", _reconnect)
+    app.router.add_get("/api/updates", _updates)
+    app.router.add_post("/api/updates/run", _run_update)
     return app
 
 

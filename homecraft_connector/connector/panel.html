@@ -50,6 +50,7 @@ table { width: 100%; border-collapse: collapse; font-size: 13px; }
 thead th { position: sticky; top: 0; background: var(--card); }
 th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
 td.target { white-space: normal; overflow-wrap: anywhere; font-family: ui-monospace, Menlo, monospace; }
+td.wrap { white-space: normal; overflow-wrap: anywhere; }
 td.ok { color: var(--ok); } td.bad { color: var(--bad); } td.warn { color: var(--warn); }
 .verification { font: 700 32px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: 2px; }
 .stack { display: grid; gap: 16px; }
@@ -110,6 +111,18 @@ a.tile:hover { border-color: var(--accent); }
       <div id="pauseMsg" class="msg"></div>
     </section>
   </div>
+
+  <section class="card" id="updates" data-tab="overview">
+    <h2>Aktualizace</h2>
+    <div class="scroll" id="updatesTable" hidden>
+      <table>
+        <thead><tr><th>Položka</th><th>Typ</th><th>Nainstalováno</th><th>Dostupné</th><th></th></tr></thead>
+        <tbody id="updatesBody"></tbody>
+      </table>
+    </div>
+    <p id="updatesEmpty" class="muted">–</p>
+    <div id="updatesMsg" class="msg"></div>
+  </section>
 
   <div data-tab="security" class="stack" hidden>
   <section class="card">
@@ -292,9 +305,72 @@ async function refreshAudit() {
   $("auditEmpty").hidden = rows.length > 0;
 }
 
+const KINDS = { card: "Karta" };
+
+function updateAction(u, paused) {
+  const td = document.createElement("td");
+  td.className = "wrap";
+  if (u.state === "running") {
+    td.textContent = "Probíhá…";
+    return td;
+  }
+  if (u.state === "done") {
+    td.textContent = "Hotovo" + (u.message ? " – " + u.message : "");
+    td.classList.add("ok");
+    return td;
+  }
+  if (u.state === "failed") {
+    const err = document.createElement("div");
+    err.textContent = u.message || "Aktualizace selhala";
+    err.style.color = "var(--bad)";
+    td.append(err);
+  }
+  const b = document.createElement("button");
+  b.className = "primary";
+  b.textContent = u.state === "failed" ? "Aktualizovat znovu" : "Aktualizovat";
+  b.disabled = paused;
+  b.onclick = async () => {
+    b.disabled = true;
+    try {
+      await call("POST", "api/updates/run", { kind: u.kind, item: u.id });
+      show("updatesMsg", "");
+    } catch (e) {
+      show("updatesMsg", e.message, true);
+      b.disabled = false;  // an unchanged list is not redrawn
+    }
+    refreshUpdates().catch(() => {});
+  };
+  td.append(b);
+  return td;
+}
+
+let lastUpdates = null;
+
+async function refreshUpdates() {
+  const s = await call("GET", "api/updates");
+  const json = JSON.stringify(s);
+  if (json === lastUpdates) return;  // redraw only on a change (keeps focus and clicks)
+  lastUpdates = json;
+  if (s.connected && !s.paused) show("updatesMsg", "");
+  $("updatesBody").replaceChildren(...s.items.map((u) => {
+    const tr = document.createElement("tr");
+    const kind = Object.hasOwn(KINDS, u.kind) ? KINDS[u.kind] : u.kind;
+    for (const text of [u.name, kind, u.installed, u.available]) {
+      const td = document.createElement("td");
+      td.textContent = text;
+      tr.append(td);
+    }
+    tr.append(updateAction(u, s.paused));
+    return tr;
+  }));
+  $("updatesTable").hidden = s.items.length === 0;
+  $("updatesEmpty").hidden = s.items.length > 0;
+  $("updatesEmpty").textContent = s.connected ? "Vše je aktuální." : "Seznam pošle Homecraft po připojení.";
+}
+
 async function refresh() {
   try {
-    await Promise.all([refreshStatus(), refreshAudit()]);
+    await Promise.all([refreshStatus(), refreshAudit(), refreshUpdates()]);
   } catch (e) {
     show("connMsg", "Panel se nepodařilo načíst: " + e.message, true);
   }
