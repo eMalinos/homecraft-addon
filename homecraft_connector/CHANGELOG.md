@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.12.3
+
+- Ingress a kontrola karet fungují i s HA na jiném portu než 8123 (`http:`
+  `server_port`, např. 80): port HA zjistí doplněk při startu od Supervisoru.
+  Dřív plán hlásil `ha_unreachable ClientConnectorError`.
+
 ## 0.12.2
 
 - Instalace doplňku přes Použít může trvat až 15 minut (dřív Connector
