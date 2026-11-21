@@ -106,9 +106,19 @@ WS_ALLOWED = [
     ),
     {"type": "hacs/repositories/list"},
     {"id": 9, "type": "hacs/repository/download", "repository": "286186485", "version": "v3.3.9"},
+    {"type": "marketplace/repositories/list"},
+    {"id": 9, "type": "marketplace/repositories/list", "categories": ["integration"]},
+    {"id": 9, "type": "marketplace/warning/accept"},
+    {
+        "id": 9,
+        "type": "marketplace/repository/install",
+        "repository": "194140521",
+        "version": "v3.4.2",
+    },
 ]
 
 HACS_DL = {"id": 9, "type": "hacs/repository/download", "repository": "286186485"}
+MP_INSTALL = {"id": 9, "type": "marketplace/repository/install", "repository": "286186485"}
 
 
 def res(url="/local/homecraft/heating-card.js?v=0.2.0", type_="create", **extra):
@@ -216,6 +226,17 @@ WS_REFUSED = [
     {**HACS_DL, "repository": {}, "version": "v3.3.9"},
     {"type": "hacs/repository/remove", "repository": "286186485"},
     {"type": "hacs/repositories/add", "repository": "x/y", "category": "integration"},
+    {**MP_INSTALL, "version": "v3.3.8"},
+    {**MP_INSTALL, "repository": "1", "version": "v3.3.9"},
+    MP_INSTALL,
+    {**MP_INSTALL, "version": None},
+    {**MP_INSTALL, "repository": 286186485, "version": "v3.3.9"},
+    {**MP_INSTALL, "version": "v3.3.9", "confirm_replace_built_in": True},
+    {**MP_INSTALL, "version": "v3.3.9", "confirm_replace_built_in": False},
+    {"type": "marketplace/warning/accept"},
+    {"id": 9, "type": "marketplace/warning/accept", "x": 1},
+    {"id": 9, "type": "marketplace/repository/uninstall", "repository": "286186485"},
+    {"id": 9, "type": "marketplace/repositories/add", "repository": "x/y"},
 ]
 
 

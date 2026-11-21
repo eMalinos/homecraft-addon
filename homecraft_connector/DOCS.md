@@ -106,14 +106,26 @@ System Monitor, Scheduler a Browser Mod) a soubory jen v `packages/`,
 `custom_templates/` a `themes/` (`configuration.yaml` jen ke čtení). Cokoli
 jiného odmítne s chybou `not_allowed`.
 
-Integrace z HACS: doplněk smí přečíst seznam repozitářů HACS
-(`hacs/repositories/list`) a nechat HACS stáhnout jen Scheduler component
-a Browser Mod v připnuté verzi (tag vydání: v3.3.9, v3.4.2). Repozitáře
-i tagy jsou pevně v kódu doplňku, kód stahuje HACS z GitHubu, server
-Homecraftu žádný kód nedoručuje. Doplněk nekontroluje, zda už je integrace
-nainstalovaná (stažení posílá backend jen u chybějící). Po stažení je potřeba
-restartovat Home Assistant (dělá uživatel). Přidat jiný repozitář do HACS ani
-integraci odinstalovat doplněk nesmí.
+Integrace z Marketplace / HACS: doplněk smí přečíst seznam repozitářů
+(`marketplace/repositories/list`, `hacs/repositories/list`) a nechat
+Marketplace nebo HACS stáhnout jen Scheduler component a Browser Mod
+v připnuté verzi (tag vydání: v3.3.9, v3.4.2). Repozitáře i tagy jsou pevně
+v kódu doplňku, kód stahuje Marketplace / HACS z GitHubu, server Homecraftu
+žádný kód nedoručuje. Doplněk nekontroluje, zda už je integrace nainstalovaná
+(instalaci posílá backend jen u chybějící).
+
+- Na HA 2026.11+ jde instalace přes Marketplace (Nastavení › Marketplace,
+  nástupce HACS). Marketplace před první instalací vyžaduje přijetí úvodního
+  upozornění; Homecraft ho přijme (`marketplace/warning/accept`) za systémového
+  uživatele doplňku, a to jen když v Planu zaškrtnete instalaci integrace
+  (vidíte ji v Homecraftu). Nová integrace s config flow se načte bez restartu
+  Home Assistantu. Nahradit vestavěnou integraci HA
+  (`confirm_replace_built_in`) doplněk nikdy nesmí.
+- Se samostatným HACS je po stažení potřeba restartovat Home Assistant (dělá
+  uživatel).
+
+Přidat jiný repozitář do Marketplace / HACS ani integraci odinstalovat doplněk
+nesmí.
 
 Vlastní karty Homecraftu: doplněk smí zapsat a smazat soubory
 `www/homecraft/<id>.js` (první zápis založí i chybějící `www/`), vytvořit a
@@ -140,7 +152,7 @@ a odmítne s chybou `refused_content` vše, co by spouštělo příkazy nebo pos
 data ven (se záznamem v auditu panelu). Seznamy jsou pevně v kódu
 a nastavení je nerozšíří. Je to denylist: díru zužuje, nezavírá (viz limity).
 
-Integrace z HACS mají v kódu doplňku připnutou verzi (tag vydání): nová
+Integrace z Marketplace / HACS mají v kódu doplňku připnutou verzi (tag vydání): nová
 verze integrace = nová verze doplňku.
 
 - **Soubory v `packages/`** se rozparsují jako YAML. Odmítne se:
@@ -245,8 +257,8 @@ program, musí ve stejném PR upravit `apparmor.txt` a ověřit ho na HA OS
   může nasadit jen podepsanou kartu Homecraftu, ale i starší verzi nebo jinou
   kartu pod jiným názvem. Ochrana platí od verze 0.11.0 (starší verze doplňku
   zapíše jakýkoli JavaScript, aktualizujte).
-- Integrace z HACS jsou připnuté jen tagem vydání, ne obsahem: kdyby autor
-  tag v repozitáři přesunul, HACS stáhne nový obsah.
+- Integrace z Marketplace / HACS jsou připnuté jen tagem vydání, ne obsahem:
+  kdyby autor tag v repozitáři přesunul, Marketplace / HACS stáhne nový obsah.
 - Služba Browser Mod `browser_mod.javascript` spouští JavaScript v
   prohlížečích registrovaných v Browser Mod. Vzhled Mushroom feature Topení ji
   dnes zapisuje do `custom_templates/` a doplněk její kód zatím neomezuje

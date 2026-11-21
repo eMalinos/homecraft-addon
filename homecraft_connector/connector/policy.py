@@ -52,11 +52,14 @@ WS_TYPES = frozenset(
         "zeroconf/subscribe_discovery",
         "unsubscribe_events",
         "hacs/repositories/list",
+        # HA 2026.11+ Marketplace (built-in HACS successor, #25)
+        "marketplace/repositories/list",
     }
 )
-# HACS integrations features require (homecraft#786): HACS downloads them from
-# GitHub, never Homecraft's server. Key = the GitHub repository ID (HACS's
-# `repository`, stable across renames), value = the only version allowed.
+# HACS / Marketplace integrations features require (homecraft#786, #25): HACS or
+# HA's Marketplace downloads them from GitHub, never Homecraft's server. Key = the
+# GitHub repository ID (`repository` in both APIs, stable across renames), value =
+# the only version allowed.
 # A new version = a new add-on release (and the same pin in the library).
 HACS_PINNED = {
     "286186485": "v3.3.9",  # nielsfaber/scheduler-component
@@ -192,7 +195,10 @@ def ws_allowed(msg: object) -> bool:
         return set(msg) <= {"id", "type", "entry_id", "pref_disable_polling"} and (
             msg.get("pref_disable_polling") is True and isinstance(msg.get("entry_id"), str)
         )
-    if t == "hacs/repository/download":  # `repository` is a string in HACS
+    if t == "marketplace/warning/accept":  # the add-on user accepts Marketplace's notice
+        return set(msg) == {"id", "type"}
+    # `repository` is a string in both; never `confirm_replace_built_in`
+    if t in ("hacs/repository/download", "marketplace/repository/install"):
         repo, version = msg.get("repository"), msg.get("version")
         if not (isinstance(repo, str) and isinstance(version, str)):
             return False
