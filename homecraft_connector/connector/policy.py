@@ -51,8 +51,17 @@ WS_TYPES = frozenset(
         "ssdp/subscribe_discovery",
         "zeroconf/subscribe_discovery",
         "unsubscribe_events",
+        "hacs/repositories/list",
     }
 )
+# HACS integrations features require (homecraft#786): HACS downloads them from
+# GitHub, never Homecraft's server. Key = the GitHub repository ID (HACS's
+# `repository`, stable across renames), value = the only version allowed.
+# A new version = a new add-on release (and the same pin in the library).
+HACS_PINNED = {
+    "286186485": "v3.3.9",  # nielsfaber/scheduler-component
+    "194140521": "v3.4.2",  # thomasloven/hass-browser_mod
+}
 # Per registry, the verbs ha_registry_applicators, config_file_applicator and
 # the inventory send.
 REGISTRY_VERBS = {
@@ -183,6 +192,10 @@ def ws_allowed(msg: object) -> bool:
         return set(msg) <= {"id", "type", "entry_id", "pref_disable_polling"} and (
             msg.get("pref_disable_polling") is True and isinstance(msg.get("entry_id"), str)
         )
+    if t == "hacs/repository/download":  # `repository` is a string in HACS
+        return set(msg) == {"id", "type", "repository", "version"} and HACS_PINNED.get(
+            msg.get("repository")
+        ) == msg.get("version")
     if t == "lovelace/dashboards/create":
         return msg.get("url_path") == OWN_DASHBOARD
     if t == "lovelace/resources/create":
@@ -231,6 +244,10 @@ SQL_QUERIES = frozenset(  # observability: the recorder's own database size
 SQL_OPTIONS = frozenset({"unit_of_measurement", "device_class", "state_class"})
 FLOW_FIELDS = {
     "speedtestdotnet": {},
+    # no form: observability (homecraft#782), heating (homecraft#786)
+    "systemmonitor": {},
+    "scheduler": {},
+    "browser_mod": {},
     "ping": {"host": lambda v: v == "1.1.1.1"},
     "holiday": {"country": _text},
     # no db_url: the recorder's database only

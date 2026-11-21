@@ -119,7 +119,7 @@ def test_integration_steps_pass():
     ]
     if not entries:
         pytest.skip(f"no HFB library at {HFB}")
-    assert {d for d, _ in entries} == {"sql", "speedtestdotnet", "ping", "holiday"}
+    assert {d for d, _ in entries} == {"sql", "speedtestdotnet", "ping", "holiday", "systemmonitor"}
     for domain, entry in entries:
         for step in entry["steps"]:
             assert policy.flow_step_allowed(domain, json.dumps(step).encode()), (domain, step)

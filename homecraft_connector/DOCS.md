@@ -100,9 +100,18 @@ panelu načíst a hodnotu přečíst může.
 Doplněk provede jen operace z pevného seznamu v jeho kódu (ne z možností ani ze
 serveru): příkazy WebSocketu, které features potřebují (registry, pomocníci,
 dashboardy, `reload` služby, `scheduler.edit`, doplňky Node-RED, go2rtc,
-InfluxDB a Grafana), několik REST adres (kontrola konfigurace, integrace
-InfluxDB) a soubory jen v `packages/`, `custom_templates/` a `themes/`
-(`configuration.yaml` jen ke čtení). Cokoli jiného odmítne s chybou `not_allowed`.
+InfluxDB a Grafana), několik REST adres (kontrola konfigurace, config flow
+integrací, které zakládá Apply: InfluxDB, SQL, Speedtest, Ping, Holiday,
+System Monitor, Scheduler a Browser Mod) a soubory jen v `packages/`,
+`custom_templates/` a `themes/` (`configuration.yaml` jen ke čtení). Cokoli
+jiného odmítne s chybou `not_allowed`.
+
+Integrace z HACS: doplněk smí přečíst seznam repozitářů HACS
+(`hacs/repositories/list`) a nechat HACS stáhnout jen Scheduler component
+(v3.3.9) a Browser Mod (v3.4.2). Repozitáře i verze jsou pevně v kódu
+doplňku, kód stahuje HACS z GitHubu, server Homecraftu žádný kód nedoručuje.
+Po stažení je potřeba restartovat Home Assistant (dělá uživatel). Přidat jiný
+repozitář do HACS ani integraci odinstalovat doplněk nesmí.
 
 Vlastní karty Homecraftu: doplněk smí zapsat a smazat soubory
 `www/homecraft/<id>.js` (první zápis založí i chybějící `www/`), vytvořit a
@@ -128,6 +137,9 @@ Home Assistantem a když neprojde, vrátí soubor do původního stavu. Pokud
 a odmítne s chybou `refused_content` vše, co by spouštělo příkazy nebo posílalo
 data ven (se záznamem v auditu panelu). Seznamy jsou pevně v kódu
 a nastavení je nerozšíří. Je to denylist: díru zužuje, nezavírá (viz limity).
+
+Integrace z HACS mají připnutou verzi v kódu doplňku: nová verze integrace =
+nová verze doplňku.
 
 - **Soubory v `packages/`** se rozparsují jako YAML. Odmítne se:
   - klíč `shell_command`, `command_line`, `python_script`, `pyscript`,

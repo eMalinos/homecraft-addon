@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.13.0
+
+- Homecraft může nechat HACS stáhnout Scheduler component (v3.3.9) a Browser
+  Mod (v3.4.2) v ověřených verzích a založit jejich integraci. Repozitáře
+  i verze jsou pevně v kódu doplňku, kód stahuje HACS z GitHubu.
+- Apply nově zakládá i integraci System Monitor (observability).
+
 ## 0.12.4
 
 - Start doplňku už v HA nevytváří notifikaci o nepovedeném přihlášení.

@@ -1,6 +1,6 @@
 name: Homecraft Connector
 description: Připojí Home Assistant k Homecraftu odchozím spojením (bez veřejné adresy a VPN).
-version: "0.12.4"
+version: "0.13.0"
 slug: homecraft_connector
 url: https://github.com/homecraftcz/homecraft-addon
 arch:
